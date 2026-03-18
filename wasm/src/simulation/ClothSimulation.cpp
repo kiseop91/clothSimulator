@@ -127,10 +127,17 @@ void ClothSimulation::init(float width, float height, int resX, int resY) {
         }
     }
 
-    // Fill initial vertex data
-    for (int i = 0; i < vertCount; i++) {
-        cachedMeshData_.vertices[i].position = particles_[i].position;
-        cachedMeshData_.vertices[i].normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    // Fill initial vertex data with UV coordinates
+    for (int y = 0; y < resY; y++) {
+        for (int x = 0; x < resX; x++) {
+            int i = y * resX + x;
+            cachedMeshData_.vertices[i].position = particles_[i].position;
+            cachedMeshData_.vertices[i].normal = glm::vec3(0.0f, 0.0f, 1.0f);
+            cachedMeshData_.vertices[i].texCoord = glm::vec2(
+                static_cast<float>(x) / static_cast<float>(resX - 1),
+                static_cast<float>(y) / static_cast<float>(resY - 1)
+            );
+        }
     }
 
     lastTime_ = -1.0;
@@ -226,10 +233,17 @@ void ClothSimulation::initHorizontal(float width, float depth, int resX, int res
         }
     }
 
-    // Fill initial vertex data with upward-facing normal
-    for (int i = 0; i < vertCount; i++) {
-        cachedMeshData_.vertices[i].position = particles_[i].position;
-        cachedMeshData_.vertices[i].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    // Fill initial vertex data with upward-facing normal + UV
+    for (int z = 0; z < resZ; z++) {
+        for (int x = 0; x < resX; x++) {
+            int i = z * resX + x;
+            cachedMeshData_.vertices[i].position = particles_[i].position;
+            cachedMeshData_.vertices[i].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            cachedMeshData_.vertices[i].texCoord = glm::vec2(
+                static_cast<float>(x) / static_cast<float>(resX - 1),
+                static_cast<float>(z) / static_cast<float>(resZ - 1)
+            );
+        }
     }
 
     lastTime_ = -1.0;

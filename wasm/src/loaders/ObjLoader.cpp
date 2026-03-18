@@ -82,9 +82,20 @@ std::vector<MeshData> ObjLoader::load(const uint8_t* data, size_t size) {
                     vertex.normal = faceNormal;
                 }
 
+                // UV coordinates
+                if (idx.texcoord_index >= 0 && static_cast<size_t>(2 * idx.texcoord_index + 1) < attrib.texcoords.size()) {
+                    vertex.texCoord = glm::vec2(
+                        attrib.texcoords[2 * idx.texcoord_index + 0],
+                        attrib.texcoords[2 * idx.texcoord_index + 1]
+                    );
+                } else {
+                    vertex.texCoord = glm::vec2(0.0f);
+                }
+
                 // Create unique key for deduplication
                 std::string key = std::to_string(idx.vertex_index) + "/" +
-                                  std::to_string(idx.normal_index);
+                                  std::to_string(idx.normal_index) + "/" +
+                                  std::to_string(idx.texcoord_index);
 
                 auto it = uniqueVertices.find(key);
                 if (it == uniqueVertices.end()) {

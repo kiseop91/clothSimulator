@@ -54,6 +54,11 @@ void Mesh::initInternal(const MeshData& data, GLenum vboUsage) {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           (void*)offsetof(Vertex, normal));
 
+    // aTexCoord at location 2
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, texCoord));
+
     glBindVertexArray(0);
 }
 

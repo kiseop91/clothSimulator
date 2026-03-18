@@ -1,6 +1,8 @@
 #include "renderer/Renderer.h"
 #include "renderer/ShaderSources.h"
 
+#include "../../third_party/tinygltf/stb_image.h"
+
 #include <GLES3/gl3.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -54,6 +56,9 @@ Renderer::Renderer()
     , initialized_(false)
     , clothMesh_(nullptr)
     , sphereVao_(0), sphereVbo_(0), sphereVertexCount_(0), selectedSphereIndex_(-1)
+    , shadowFBO_(0), shadowDepthTexture_(0), shadowMapSize_(1024)
+    , wireframeMode_(false)
+    , diffuseTexture_(0), hasTexture_(false)
 {
 }
 
@@ -111,6 +116,9 @@ bool Renderer::init(const std::string& canvasId) {
     // Init sphere wireframe mesh
     initSphereWireframe();
 
+    // Init shadow map
+    initShadowMap();
+
     initialized_ = true;
 
     // Start render loop
@@ -128,7 +136,103 @@ bool Renderer::initShaders() {
     if (!wireShader_.compile(ShaderSources::wireVertexShader, ShaderSources::wireFragmentShader)) {
         return false;
     }
+    if (!shadowShader_.compile(ShaderSources::shadowVertexShader, ShaderSources::shadowFragmentShader)) {
+        emscripten_log(EM_LOG_WARN, "Shadow shader compile failed, shadows disabled");
+    }
     return true;
+}
+
+void Renderer::initShadowMap() {
+    glGenFramebuffers(1, &shadowFBO_);
+    glGenTextures(1, &shadowDepthTexture_);
+
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, shadowMapSize_, shadowMapSize_,
+                 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowDepthTexture_, 0);
+
+    // No color attachment
+    GLenum drawBuffers = GL_NONE;
+    glDrawBuffers(1, &drawBuffers);
+    glReadBuffer(GL_NONE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Renderer::renderShadowPass() {
+    if (!shadowShader_.getProgram()) return;
+
+    // Light setup — directional from (5, 8, 5)
+    glm::mat4 lightView = glm::lookAt(lightPos_, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 lightProj = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 30.0f);
+    lightSpaceMatrix_ = lightProj * lightView;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO_);
+    glViewport(0, 0, shadowMapSize_, shadowMapSize_);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    shadowShader_.use();
+    shadowShader_.setMat4("u_lightSpaceMatrix", lightSpaceMatrix_);
+
+    // Render scene meshes to shadow map
+    const auto& meshes = scene_.getMeshes();
+    for (auto* mesh : meshes) {
+        if (!mesh->isVisible()) continue;
+        shadowShader_.setMat4("u_model", mesh->getModelMatrix());
+        mesh->render();
+    }
+
+    // Render cloth to shadow map
+    if (clothMesh_ && clothMesh_->isVisible()) {
+        shadowShader_.setMat4("u_model", glm::mat4(1.0f));
+        glDisable(GL_CULL_FACE);
+        clothMesh_->render();
+        glEnable(GL_CULL_FACE);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+}
+
+void Renderer::loadDiffuseTexture(const uint8_t* data, int size) {
+    // Decode image using stb_image
+    int w, h, channels;
+    unsigned char* pixels = stbi_load_from_memory(data, size, &w, &h, &channels, 4);
+    if (!pixels) {
+        emscripten_log(EM_LOG_ERROR, "Failed to decode texture image");
+        return;
+    }
+
+    if (diffuseTexture_) glDeleteTextures(1, &diffuseTexture_);
+
+    glGenTextures(1, &diffuseTexture_);
+    glBindTexture(GL_TEXTURE_2D, diffuseTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    stbi_image_free(pixels);
+    hasTexture_ = true;
+    emscripten_log(EM_LOG_CONSOLE, "Texture loaded: %dx%d", w, h);
+}
+
+void Renderer::clearDiffuseTexture() {
+    if (diffuseTexture_) {
+        glDeleteTextures(1, &diffuseTexture_);
+        diffuseTexture_ = 0;
+    }
+    hasTexture_ = false;
 }
 
 void Renderer::initSphereWireframe() {
@@ -278,7 +382,10 @@ void Renderer::stepAndRender(double time) {
 void Renderer::renderFrame() {
     if (!initialized_) return;
 
-    // Dark blue-gray background
+    // === Shadow Pass ===
+    renderShadowPass();
+
+    // === Main Pass ===
     glClearColor(0.11f, 0.11f, 0.18f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -286,60 +393,118 @@ void Renderer::renderFrame() {
     glm::mat4 view = camera_.getViewMatrix();
     glm::mat4 proj = camera_.getProjectionMatrix(aspect);
 
-    // Render grid (disable depth write so it doesn't fight with model)
+    // Grid
     glDepthMask(GL_FALSE);
     grid_.render(view, proj);
     glDepthMask(GL_TRUE);
 
-    // Render scene meshes (per-mesh transform)
     const auto& meshes = scene_.getMeshes();
-    if (!meshes.empty()) {
-        pbrShader_.use();
 
+    // Helper to set up PBR uniforms (shared between scene meshes and cloth)
+    auto setupPBR = [&]() {
+        pbrShader_.use();
         pbrShader_.setMat4("u_view", view);
         pbrShader_.setMat4("u_projection", proj);
 
-        // Camera and light
         glm::vec3 camPos = camera_.getPosition();
         pbrShader_.setVec3("u_camPos", camPos);
-        pbrShader_.setVec3("u_lightPos", glm::vec3(5.0f, 8.0f, 5.0f));
-        pbrShader_.setVec3("u_lightColor", glm::vec3(300.0f, 300.0f, 300.0f));
+        pbrShader_.setVec3("u_lightPos", lightPos_);
+        pbrShader_.setVec3("u_lightColor", lightColor_ * lightIntensity_);
 
-        // Material
+        // Shadow
+        pbrShader_.setMat4("u_lightSpaceMatrix", lightSpaceMatrix_);
+        bool shadowEnabled = (shadowDepthTexture_ != 0 && shadowShader_.getProgram() != 0);
+        pbrShader_.setInt("u_shadowEnabled", shadowEnabled ? 1 : 0);
+        if (shadowEnabled) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+            pbrShader_.setInt("u_shadowMap", 0);
+        }
+
+        // Texture
+        pbrShader_.setInt("u_hasTexture", hasTexture_ ? 1 : 0);
+        if (hasTexture_) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, diffuseTexture_);
+            pbrShader_.setInt("u_diffuseMap", 1);
+        }
+
+        // Hemisphere ambient
+        pbrShader_.setVec3("u_ambientTop", ambientTop_);
+        pbrShader_.setVec3("u_ambientBottom", ambientBottom_);
+
+        // UV parameters
+        pbrShader_.setFloat("u_uvOffsetU", uvOffset_.x);
+        pbrShader_.setFloat("u_uvOffsetV", uvOffset_.y);
+        pbrShader_.setFloat("u_uvTilingU", uvTiling_.x);
+        pbrShader_.setFloat("u_uvTilingV", uvTiling_.y);
+
         scene_.getMaterial().apply(pbrShader_);
+    };
+
+    if (wireframeMode_) {
+        // Wireframe mode: render with solid color shader
+        wireShader_.use();
+        wireShader_.setMat4("u_view", view);
+        wireShader_.setMat4("u_projection", proj);
+        GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
+        glUniform4f(colorLoc, 0.4f, 0.8f, 0.4f, 1.0f);
 
         for (auto* mesh : meshes) {
             if (!mesh->isVisible()) continue;
-            glm::mat4 model = mesh->getModelMatrix();
-            pbrShader_.setMat4("u_model", model);
+            wireShader_.setMat4("u_model", mesh->getModelMatrix());
             mesh->render();
+        }
+        if (clothMesh_ && clothMesh_->isVisible()) {
+            wireShader_.setMat4("u_model", glm::mat4(1.0f));
+            glDisable(GL_CULL_FACE);
+            clothMesh_->render();
+            glEnable(GL_CULL_FACE);
+        }
+    } else {
+        // PBR mode
+        if (!meshes.empty()) {
+            setupPBR();
+            for (auto* mesh : meshes) {
+                if (!mesh->isVisible()) continue;
+                pbrShader_.setMat4("u_model", mesh->getModelMatrix());
+                mesh->render();
+            }
+        }
+
+        // Cloth (double-sided)
+        if (clothMesh_ && clothMesh_->isVisible()) {
+            setupPBR();
+            pbrShader_.setMat4("u_model", glm::mat4(1.0f));
+            glDisable(GL_CULL_FACE);
+            clothMesh_->render();
+            glEnable(GL_CULL_FACE);
         }
     }
 
-    // Render cloth mesh (double-sided)
-    if (clothMesh_ && clothMesh_->isVisible()) {
-        pbrShader_.use();
-
-        // Cloth is in world space, use identity model matrix
-        pbrShader_.setMat4("u_model", glm::mat4(1.0f));
-        pbrShader_.setMat4("u_view", view);
-        pbrShader_.setMat4("u_projection", proj);
-
-        glm::vec3 camPos = camera_.getPosition();
-        pbrShader_.setVec3("u_camPos", camPos);
-        pbrShader_.setVec3("u_lightPos", glm::vec3(5.0f, 8.0f, 5.0f));
-        pbrShader_.setVec3("u_lightColor", glm::vec3(300.0f, 300.0f, 300.0f));
-
-        scene_.getMaterial().apply(pbrShader_);
-
-        // Disable backface culling for cloth (it can fold)
-        glDisable(GL_CULL_FACE);
-        clothMesh_->render();
-        glEnable(GL_CULL_FACE);
-    }
-
-    // Render collision sphere wireframes
+    // Collision sphere wireframes (always visible)
     renderCollisionSpheres(view, proj);
+
+    // Light position visualization (yellow wireframe sphere)
+    if (sphereVertexCount_ > 0) {
+        wireShader_.use();
+        wireShader_.setMat4("u_view", view);
+        wireShader_.setMat4("u_projection", proj);
+        GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
+        glUniform4f(colorLoc, 1.0f, 1.0f, 0.3f, 0.9f);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glm::mat4 lightModel = glm::translate(glm::mat4(1.0f), lightPos_);
+        lightModel = glm::scale(lightModel, glm::vec3(0.15f));
+        wireShader_.setMat4("u_model", lightModel);
+
+        glBindVertexArray(sphereVao_);
+        glDrawArrays(GL_LINES, 0, sphereVertexCount_);
+        glBindVertexArray(0);
+        glDisable(GL_BLEND);
+    }
 }
 
 void Renderer::addClothMesh(float width, float height, int resX, int resY) {
@@ -555,10 +720,19 @@ void Renderer::destroy() {
 
     collisionSpheres_.clear();
 
+    // Clean up shadow map
+    if (shadowDepthTexture_) { glDeleteTextures(1, &shadowDepthTexture_); shadowDepthTexture_ = 0; }
+    if (shadowFBO_) { glDeleteFramebuffers(1, &shadowFBO_); shadowFBO_ = 0; }
+
+    // Clean up diffuse texture
+    if (diffuseTexture_) { glDeleteTextures(1, &diffuseTexture_); diffuseTexture_ = 0; }
+    hasTexture_ = false;
+
     scene_.clearScene();
     grid_.destroy();
     pbrShader_.destroy();
     wireShader_.destroy();
+    shadowShader_.destroy();
 
     if (contextHandle_ > 0) {
         emscripten_webgl_destroy_context(contextHandle_);

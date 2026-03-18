@@ -247,6 +247,37 @@ float getMeshPositionZ(int index) {
 void removeLoadedMesh(int index) {
     g_rendererInstance.getScene().removeMesh(index);
 }
+
+// Light control
+void setLightPosition(float x, float y, float z) { g_rendererInstance.setLightPosition(x, y, z); }
+void setLightColor(float r, float g, float b) { g_rendererInstance.setLightColor(r, g, b); }
+void setLightIntensity(float v) { g_rendererInstance.setLightIntensity(v); }
+void setAmbientTop(float r, float g, float b) { g_rendererInstance.setAmbientTop(r, g, b); }
+void setAmbientBottom(float r, float g, float b) { g_rendererInstance.setAmbientBottom(r, g, b); }
+float getLightPositionX() { return g_rendererInstance.getLightPos().x; }
+float getLightPositionY() { return g_rendererInstance.getLightPos().y; }
+float getLightPositionZ() { return g_rendererInstance.getLightPos().z; }
+
+// UV control
+void setUVOffset(float u, float v) { g_rendererInstance.setUVOffset(u, v); }
+void setUVTiling(float u, float v) { g_rendererInstance.setUVTiling(u, v); }
+
+// Wireframe mode
+void setWireframeMode(bool enabled) {
+    g_rendererInstance.setWireframeMode(enabled);
+}
+
+// Texture loading
+void loadDiffuseTexture(const emscripten::val& jsData, int size) {
+    std::vector<uint8_t> buffer = emscripten::vecFromJSArray<uint8_t>(
+        emscripten::val::global("Uint8Array").new_(jsData)
+    );
+    g_rendererInstance.loadDiffuseTexture(buffer.data(), static_cast<int>(buffer.size()));
+}
+
+void clearDiffuseTexture() {
+    g_rendererInstance.clearDiffuseTexture();
+}
 void setMeshVisible(int index, bool visible) {
     auto& meshes = g_rendererInstance.getScene().getMeshes();
     if (index >= 0 && index < static_cast<int>(meshes.size()))
@@ -267,7 +298,7 @@ int getCollisionSphereCount() {
 }
 
 // Object selection and manipulation
-// Returns: >= 0 = sphere index, -2 = cloth, -1 = nothing
+// Returns: >= 0 = sphere index, -2 = cloth, -3 = light, -1 = nothing
 int pickObject(float ndcX, float ndcY) {
     float aspect = (g_rendererInstance.getHeight() > 0)
         ? static_cast<float>(g_rendererInstance.getWidth()) / static_cast<float>(g_rendererInstance.getHeight())
@@ -278,6 +309,22 @@ int pickObject(float ndcX, float ndcY) {
     // Check spheres first (higher priority)
     int sphereIdx = g_rendererInstance.pickSphere(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z);
     if (sphereIdx >= 0) return sphereIdx;
+
+    // Check light sphere (radius 0.3)
+    {
+        glm::vec3 lp = g_rendererInstance.getLightPos();
+        glm::vec3 oc = origin - lp;
+        float r = 0.3f;
+        float a = glm::dot(dir, dir);
+        float b = 2.0f * glm::dot(oc, dir);
+        float c = glm::dot(oc, oc) - r * r;
+        float disc = b * b - 4.0f * a * c;
+        if (disc >= 0.0f) {
+            float t = (-b - std::sqrt(disc)) / (2.0f * a);
+            if (t < 0.0f) t = (-b + std::sqrt(disc)) / (2.0f * a);
+            if (t > 0.0f) return -3; // Light hit
+        }
+    }
 
     // Check cloth AABB
     float clothT = 0.0f;
@@ -363,6 +410,25 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("getMeshPositionZ", &getMeshPositionZ);
     emscripten::function("removeLoadedMesh", &removeLoadedMesh);
     emscripten::function("setMeshVisible", &setMeshVisible);
+
+    // Light control
+    emscripten::function("setLightPosition", &setLightPosition);
+    emscripten::function("setLightColor", &setLightColor);
+    emscripten::function("setLightIntensity", &setLightIntensity);
+    emscripten::function("setAmbientTop", &setAmbientTop);
+    emscripten::function("setAmbientBottom", &setAmbientBottom);
+    emscripten::function("getLightPositionX", &getLightPositionX);
+    emscripten::function("getLightPositionY", &getLightPositionY);
+    emscripten::function("getLightPositionZ", &getLightPositionZ);
+
+    // UV control
+    emscripten::function("setUVOffset", &setUVOffset);
+    emscripten::function("setUVTiling", &setUVTiling);
+
+    // Rendering modes
+    emscripten::function("setWireframeMode", &setWireframeMode);
+    emscripten::function("loadDiffuseTexture", &loadDiffuseTexture);
+    emscripten::function("clearDiffuseTexture", &clearDiffuseTexture);
 
     // Collision spheres
     emscripten::function("addCollisionSphere", &addCollisionSphere);

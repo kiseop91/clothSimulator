@@ -8,28 +8,36 @@ precision highp float;
 
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aTexCoord;
 
 uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_lightSpaceMatrix;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
+out vec2 vTexCoord;
+out vec4 vLightSpacePos;
 
 void main() {
     vec4 worldPos = u_model * vec4(aPosition, 1.0);
     vWorldPos = worldPos.xyz;
     vNormal = mat3(transpose(inverse(u_model))) * aNormal;
+    vTexCoord = aTexCoord;
+    vLightSpacePos = u_lightSpaceMatrix * worldPos;
     gl_Position = u_projection * u_view * worldPos;
 }
 )glsl";
 
-// ─── PBR Fragment Shader (Cook-Torrance) ─────────────────────────────
+// ─── PBR Fragment Shader (Cook-Torrance + Shadow + Texture + Hemisphere) ──
 static const char* pbrFragmentShader = R"glsl(#version 300 es
 precision highp float;
 
 in vec3 vWorldPos;
 in vec3 vNormal;
+in vec2 vTexCoord;
+in vec4 vLightSpacePos;
 
 uniform vec3 u_baseColor;
 uniform float u_metallic;
@@ -38,24 +46,38 @@ uniform vec3 u_camPos;
 uniform vec3 u_lightPos;
 uniform vec3 u_lightColor;
 
+// Shadow
+uniform sampler2D u_shadowMap;
+uniform bool u_shadowEnabled;
+
+// Texture
+uniform sampler2D u_diffuseMap;
+uniform bool u_hasTexture;
+
+// Hemisphere ambient
+uniform vec3 u_ambientTop;
+uniform vec3 u_ambientBottom;
+
+// UV transform
+uniform float u_uvOffsetU;
+uniform float u_uvOffsetV;
+uniform float u_uvTilingU;
+uniform float u_uvTilingV;
+
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
-// Normal Distribution Function (GGX/Trowbridge-Reitz)
 float distributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
     float NdotH = max(dot(N, H), 0.0);
     float NdotH2 = NdotH * NdotH;
-
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
     denom = PI * denom * denom;
-
     return a2 / max(denom, 0.0001);
 }
 
-// Geometry Function (Smith's method with Schlick-GGX)
 float geometrySchlickGGX(float NdotV, float roughness) {
     float r = roughness + 1.0;
     float k = (r * r) / 8.0;
@@ -65,14 +87,36 @@ float geometrySchlickGGX(float NdotV, float roughness) {
 float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
     float NdotV = max(dot(N, V), 0.0);
     float NdotL = max(dot(N, L), 0.0);
-    float ggx1 = geometrySchlickGGX(NdotV, roughness);
-    float ggx2 = geometrySchlickGGX(NdotL, roughness);
-    return ggx1 * ggx2;
+    return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
 }
 
-// Fresnel (Schlick approximation)
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// PCF Shadow Sampling
+float calcShadow(vec4 lightSpacePos, vec3 N, vec3 L) {
+    if (!u_shadowEnabled) return 0.0;
+
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0) return 0.0;
+
+    float bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
+    float currentDepth = projCoords.z;
+
+    // PCF 3x3
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float pcfDepth = texture(u_shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    return shadow / 9.0;
 }
 
 void main() {
@@ -81,9 +125,13 @@ void main() {
     vec3 L = normalize(u_lightPos - vWorldPos);
     vec3 H = normalize(V + L);
 
-    // F0: reflectance at normal incidence
+    // Albedo: texture or base color
+    // Apply UV tiling and offset
+    vec2 uv = vTexCoord * vec2(u_uvTilingU, u_uvTilingV) + vec2(u_uvOffsetU, u_uvOffsetV);
+    vec3 albedo = u_hasTexture ? texture(u_diffuseMap, uv).rgb : u_baseColor;
+
     vec3 F0 = vec3(0.04);
-    F0 = mix(F0, u_baseColor, u_metallic);
+    F0 = mix(F0, albedo, u_metallic);
 
     // Cook-Torrance BRDF
     float NDF = distributionGGX(N, H, u_roughness);
@@ -94,22 +142,23 @@ void main() {
     float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
     vec3 specular = numerator / denominator;
 
-    // Energy conservation
     vec3 kS = F;
-    vec3 kD = vec3(1.0) - kS;
-    kD *= (1.0 - u_metallic);
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - u_metallic);
 
     float NdotL = max(dot(N, L), 0.0);
 
-    // Light attenuation
     float dist = length(u_lightPos - vWorldPos);
-    float attenuation = 1.0 / (1.0 + 0.01 * dist * dist);
+    float attenuation = 1.0 / (1.0 + 0.001 * dist * dist);
     vec3 radiance = u_lightColor * attenuation;
 
-    vec3 Lo = (kD * u_baseColor / PI + specular) * radiance * NdotL;
+    // Shadow
+    float shadow = calcShadow(vLightSpacePos, N, L);
 
-    // Ambient
-    vec3 ambient = vec3(0.08) * u_baseColor;
+    vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow);
+
+    // Hemisphere ambient
+    float hemisphereWeight = dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+    vec3 ambient = mix(u_ambientBottom, u_ambientTop, hemisphereWeight) * albedo;
 
     vec3 color = ambient + Lo;
 
@@ -117,6 +166,31 @@ void main() {
     color = pow(color, vec3(1.0 / 2.2));
 
     fragColor = vec4(color, 1.0);
+}
+)glsl";
+
+// ─── Shadow Depth Vertex Shader ─────────────────────────────────────
+static const char* shadowVertexShader = R"glsl(#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 aPosition;
+
+uniform mat4 u_model;
+uniform mat4 u_lightSpaceMatrix;
+
+void main() {
+    gl_Position = u_lightSpaceMatrix * u_model * vec4(aPosition, 1.0);
+}
+)glsl";
+
+// ─── Shadow Depth Fragment Shader ───────────────────────────────────
+static const char* shadowFragmentShader = R"glsl(#version 300 es
+precision highp float;
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
 }
 )glsl";
 
@@ -149,15 +223,14 @@ void main() {
     float dist = length(vPos.xz);
     float fade = 1.0 - smoothstep(5.0, 12.0, dist);
 
-    // Brighter for center axes
     bool isAxisX = (abs(vPos.z) < 0.05);
     bool isAxisZ = (abs(vPos.x) < 0.05);
 
     vec3 color;
     if (isAxisX) {
-        color = vec3(0.6, 0.2, 0.2); // red-ish X axis
+        color = vec3(0.6, 0.2, 0.2);
     } else if (isAxisZ) {
-        color = vec3(0.2, 0.2, 0.6); // blue-ish Z axis
+        color = vec3(0.2, 0.2, 0.6);
     } else {
         color = vec3(0.35, 0.35, 0.40);
     }

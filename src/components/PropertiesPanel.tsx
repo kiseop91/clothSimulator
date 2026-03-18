@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { Move, Box, Palette, Layers, Wind, Play, Pause, RotateCcw, Plus, Circle, Trash2, ArrowDown, Shirt, Eye, EyeOff } from "lucide-react";
+import { useCallback, useState, useRef } from "react";
+import { Move, Box, Palette, Layers, Wind, Play, Pause, RotateCcw, Plus, Circle, Trash2, ArrowDown, Shirt, Eye, EyeOff, Image, Sun } from "lucide-react";
 import { useRenderer } from "../context/RendererContext.tsx";
 
 export default function PropertiesPanel() {
@@ -37,6 +37,15 @@ export default function PropertiesPanel() {
             <span>Material</span>
           </div>
           <MaterialSection bridge={bridge} />
+        </div>
+
+        {/* Lighting Section */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-gray-400 text-xs font-medium uppercase tracking-wide">
+            <Sun className="w-3.5 h-3.5" />
+            <span>Lighting</span>
+          </div>
+          <LightingSection bridge={bridge} />
         </div>
 
         {/* Loaded Meshes Section */}
@@ -162,7 +171,16 @@ function MeshInfoSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["b
 // --- Material ---
 
 function MaterialSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
-  const { material, setBaseColor, setMetallic, setRoughness } = bridge;
+  const { material, setBaseColor, setMetallic, setRoughness, loadDiffuseTexture, clearDiffuseTexture } = bridge;
+  const textureInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTextureUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const buffer = await file.arrayBuffer();
+    loadDiffuseTexture(buffer);
+    if (textureInputRef.current) textureInputRef.current.value = "";
+  }, [loadDiffuseTexture]);
 
   const colorHex = rgbToHex(material.baseColor[0], material.baseColor[1], material.baseColor[2]);
 
@@ -225,6 +243,103 @@ function MaterialSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["b
           onChange={(e) => setRoughness(parseFloat(e.target.value))}
           className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
         />
+      </div>
+
+      {/* Texture */}
+      <div>
+        <label className="text-xs text-gray-400 mb-1 block">Diffuse Texture</label>
+        <input
+          ref={textureInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleTextureUpload}
+        />
+        <div className="flex gap-2">
+          <button
+            onClick={() => textureInputRef.current?.click()}
+            className="flex-1 flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors cursor-pointer"
+          >
+            <Image className="w-3.5 h-3.5" />
+            Upload Texture
+          </button>
+          <button
+            onClick={clearDiffuseTexture}
+            className="flex items-center justify-center gap-1.5 bg-gray-600 hover:bg-gray-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors cursor-pointer"
+            title="Clear Texture"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* UV Tiling & Offset */}
+      <div>
+        <label className="text-xs text-gray-400 mb-1 block">UV Tiling</label>
+        <div className="grid grid-cols-2 gap-2">
+          <input type="number" step={0.1} value={bridge.uvSettings.tiling[0]}
+            onChange={(e) => bridge.setUVTiling(parseFloat(e.target.value) || 1, bridge.uvSettings.tiling[1])}
+            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="U" />
+          <input type="number" step={0.1} value={bridge.uvSettings.tiling[1]}
+            onChange={(e) => bridge.setUVTiling(bridge.uvSettings.tiling[0], parseFloat(e.target.value) || 1)}
+            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="V" />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-gray-400 mb-1 block">UV Offset</label>
+        <div className="grid grid-cols-2 gap-2">
+          <input type="number" step={0.1} value={bridge.uvSettings.offset[0]}
+            onChange={(e) => bridge.setUVOffset(parseFloat(e.target.value) || 0, bridge.uvSettings.offset[1])}
+            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="U" />
+          <input type="number" step={0.1} value={bridge.uvSettings.offset[1]}
+            onChange={(e) => bridge.setUVOffset(bridge.uvSettings.offset[0], parseFloat(e.target.value) || 0)}
+            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="V" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Lighting ---
+
+function LightingSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
+  const { light, setLightPosition, setLightColor, setLightIntensity, setAmbientTop, setAmbientBottom } = bridge;
+
+  const lightColorHex = rgbToHex(light.color[0], light.color[1], light.color[2]);
+  const ambTopHex = rgbToHex(light.ambientTop[0] * 4, light.ambientTop[1] * 4, light.ambientTop[2] * 4);
+  const ambBotHex = rgbToHex(light.ambientBottom[0] * 4, light.ambientBottom[1] * 4, light.ambientBottom[2] * 4);
+
+  return (
+    <div className="space-y-2">
+      <Vec3Group label="Position" values={light.position} step={0.5} onChange={(x, y, z) => setLightPosition(x, y, z)} />
+
+      <div>
+        <label className="text-xs text-gray-400 mb-1 block">Color</label>
+        <input type="color" value={lightColorHex}
+          onChange={(e) => { const [r, g, b] = hexToRgb(e.target.value); setLightColor(r, g, b); }}
+          className="h-7 w-full rounded border border-gray-600 bg-gray-700 cursor-pointer" />
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-400 mb-1 block">Intensity ({light.intensity.toFixed(1)})</label>
+        <input type="range" min={0} max={10} step={0.1} value={light.intensity}
+          onChange={(e) => setLightIntensity(parseFloat(e.target.value))}
+          className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-yellow-500" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] text-gray-500 block">Ambient Sky</label>
+          <input type="color" value={ambTopHex}
+            onChange={(e) => { const [r, g, b] = hexToRgb(e.target.value); setAmbientTop(r * 0.25, g * 0.25, b * 0.25); }}
+            className="h-7 w-full rounded border border-gray-600 bg-gray-700 cursor-pointer" />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 block">Ambient Ground</label>
+          <input type="color" value={ambBotHex}
+            onChange={(e) => { const [r, g, b] = hexToRgb(e.target.value); setAmbientBottom(r * 0.25, g * 0.25, b * 0.25); }}
+            className="h-7 w-full rounded border border-gray-600 bg-gray-700 cursor-pointer" />
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { useRenderer } from "../context/RendererContext.tsx";
-import { Loader, AlertTriangle, ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2 } from "lucide-react";
+import { Loader, AlertTriangle, ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, Grid3x3 } from "lucide-react";
 
 export default function ModelViewer() {
   const { module, wasmLoading, wasmError, bridge } = useRenderer();
@@ -12,7 +12,9 @@ export default function ModelViewer() {
   const lastPosRef = useRef({ x: 0, y: 0 });
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
   const pinchDistRef = useRef(0);
+  const isDraggingLightRef = useRef(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [wireframe, setWireframe] = useState(false);
 
   useEffect(() => {
     if (!module || initializedRef.current) return;
@@ -48,12 +50,25 @@ export default function ModelViewer() {
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     isDraggingRef.current = true;
+    isDraggingLightRef.current = false;
     dragButtonRef.current = e.button;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+
+    // Check if clicking on light sphere
+    if (e.button === 0 && canvasRef.current && module) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      const result = module.pickObject(ndcX, ndcY);
+      if (result === -3) {
+        isDraggingLightRef.current = true;
+      }
+    }
+
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     e.preventDefault();
-  }, []);
+  }, [module]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -62,13 +77,19 @@ export default function ModelViewer() {
       const dy = e.clientY - lastPosRef.current.y;
       lastPosRef.current = { x: e.clientX, y: e.clientY };
 
-      if (dragButtonRef.current === 0) {
+      if (isDraggingLightRef.current) {
+        // Move light: shift position based on mouse delta
+        const lx = module.getLightPositionX() + dx * 0.03;
+        const ly = module.getLightPositionY() - dy * 0.03;
+        const lz = module.getLightPositionZ();
+        bridge.setLightPosition(lx, ly, lz);
+      } else if (dragButtonRef.current === 0) {
         module.cameraRotate(dx * 0.5, dy * 0.5);
       } else if (dragButtonRef.current === 2) {
         module.cameraPan(dx * 0.01, dy * 0.01);
       }
     },
-    [module]
+    [module, bridge]
   );
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -76,7 +97,7 @@ export default function ModelViewer() {
     const dy = e.clientY - mouseDownPosRef.current.y;
     const moved = Math.sqrt(dx * dx + dy * dy);
 
-    if (moved < 3 && dragButtonRef.current === 0 && canvasRef.current) {
+    if (moved < 3 && dragButtonRef.current === 0 && !isDraggingLightRef.current && canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
       const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -84,6 +105,7 @@ export default function ModelViewer() {
     }
 
     isDraggingRef.current = false;
+    isDraggingLightRef.current = false;
     dragButtonRef.current = -1;
   }, [bridge]);
 
@@ -132,6 +154,12 @@ export default function ModelViewer() {
   const handleResetView = useCallback(() => {
     module?.cameraResetView();
   }, [module]);
+
+  const handleWireframe = useCallback(() => {
+    const next = !wireframe;
+    setWireframe(next);
+    bridge.setWireframeMode(next);
+  }, [wireframe, bridge]);
 
   const handleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -241,6 +269,15 @@ export default function ModelViewer() {
           title="Reset View"
         >
           <RotateCw className="w-4 h-4" />
+        </button>
+        <button
+          onClick={handleWireframe}
+          className={`p-2 rounded-lg backdrop-blur-sm border border-gray-600/50 transition-colors cursor-pointer ${
+            wireframe ? 'bg-green-600/80 text-white' : 'bg-gray-800/80 hover:bg-gray-700/80 text-white'
+          }`}
+          title="Toggle Wireframe"
+        >
+          <Grid3x3 className="w-4 h-4" />
         </button>
         <button
           onClick={handleFullscreen}

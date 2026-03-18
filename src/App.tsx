@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Upload, Download, Menu, Sun, Moon, Settings, FolderOpen, Eye, Cuboid } from "lucide-react";
+import { Upload, Download, Menu, Sun, Moon, Settings, FolderOpen, Eye, Cuboid, Trash2 } from "lucide-react";
 import { useRenderer } from "./context/RendererContext.tsx";
 import { loadFile, type LoadedFile } from "./lib/fileLoader.ts";
+import { saveModelToDB, getAllModels, deleteModelFromDB, loadSceneState, clearAllModels, clearSceneState } from "./lib/storage.ts";
 import ModelViewer from "./components/ModelViewer.tsx";
 import FilePanel from "./components/FilePanel.tsx";
 import PropertiesPanel from "./components/PropertiesPanel.tsx";
@@ -28,6 +29,68 @@ export default function App() {
     return () => window.removeEventListener('resize', handler);
   }, []);
 
+  // Restore session from IndexedDB + LocalStorage
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!module || restoredRef.current) return;
+    restoredRef.current = true;
+
+    (async () => {
+      // 1. Restore models from IndexedDB
+      const savedModels = await getAllModels();
+      if (savedModels.length > 0) {
+        const restoredFiles: UploadedFile[] = [];
+        let lastId: string | null = null;
+        for (const model of savedModels) {
+          if (bridge.loadModel(model.data, model.extension)) {
+            restoredFiles.push({
+              id: model.id,
+              name: model.name,
+              extension: model.extension,
+              data: model.data,
+            });
+            lastId = model.id;
+          }
+        }
+        if (restoredFiles.length > 0) {
+          setFiles(restoredFiles);
+          setActiveFileId(lastId);
+        }
+      }
+
+      // 2. Restore scene state from LocalStorage
+      const sceneState = loadSceneState();
+      if (sceneState) {
+        // Collision spheres
+        for (const s of sceneState.collisionSpheres) {
+          bridge.addCollisionSphere(s.x, s.y, s.z, s.radius);
+        }
+        // Mesh transforms
+        for (let i = 0; i < sceneState.meshTransforms.length; i++) {
+          const m = sceneState.meshTransforms[i];
+          bridge.setMeshPosition(i, m.x, m.y, m.z);
+          if (!m.visible) bridge.setMeshVisible(i, false);
+        }
+        // Material
+        if (sceneState.material) {
+          const [r, g, b] = sceneState.material.baseColor;
+          bridge.setBaseColor(r, g, b);
+          bridge.setMetallic(sceneState.material.metallic);
+          bridge.setRoughness(sceneState.material.roughness);
+        }
+        // Cloth settings
+        if (sceneState.clothSettings) {
+          const cs = sceneState.clothSettings;
+          bridge.setGravity(cs.gravity[0], cs.gravity[1], cs.gravity[2]);
+          bridge.setWindForce(cs.wind[0], cs.wind[1], cs.wind[2]);
+          bridge.setClothStiffness(cs.stiffness);
+          bridge.setClothDamping(cs.damping);
+          bridge.setClothFriction(cs.friction);
+        }
+      }
+    })();
+  }, [module, bridge]);
+
   const handleUpload = useCallback(
     async (fileList: FileList | null) => {
       if (!fileList || fileList.length === 0) return;
@@ -39,6 +102,7 @@ export default function App() {
 
         if (bridge.loadModel(loaded.data, loaded.extension)) {
           setActiveFileId(id);
+          saveModelToDB(id, loaded.name, loaded.extension, loaded.data);
         }
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -62,6 +126,7 @@ export default function App() {
       if (activeFileId === fileId) {
         setActiveFileId(null);
       }
+      deleteModelFromDB(fileId);
     },
     [activeFileId]
   );
@@ -157,6 +222,17 @@ export default function App() {
             title="Settings"
           >
             <Settings className="w-5 h-5" />
+          </button>
+          <button
+            onClick={async () => {
+              await clearAllModels();
+              clearSceneState();
+              window.location.reload();
+            }}
+            className="p-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded-lg transition-colors cursor-pointer"
+            title="Clear All Saved Data"
+          >
+            <Trash2 className="w-4 h-4 md:w-5 md:h-5" />
           </button>
         </div>
       </div>

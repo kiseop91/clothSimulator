@@ -44,6 +44,25 @@ export interface WasmModule {
   removeLoadedMesh(index: number): void;
   setMeshVisible(index: number, visible: boolean): void;
 
+  // Light control
+  setLightPosition(x: number, y: number, z: number): void;
+  setLightColor(r: number, g: number, b: number): void;
+  setLightIntensity(v: number): void;
+  setAmbientTop(r: number, g: number, b: number): void;
+  setAmbientBottom(r: number, g: number, b: number): void;
+  getLightPositionX(): number;
+  getLightPositionY(): number;
+  getLightPositionZ(): number;
+
+  // UV control
+  setUVOffset(u: number, v: number): void;
+  setUVTiling(u: number, v: number): void;
+
+  // Rendering modes
+  setWireframeMode(enabled: boolean): void;
+  loadDiffuseTexture(data: Uint8Array, size: number): void;
+  clearDiffuseTexture(): void;
+
   // Collision spheres
   addCollisionSphere(x: number, y: number, z: number, radius: number): void;
   removeCollisionSphere(index: number): void;

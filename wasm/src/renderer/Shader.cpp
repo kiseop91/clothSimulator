@@ -66,6 +66,10 @@ void Shader::setFloat(const std::string& name, float value) const {
     glUniform1f(getUniformLocation(name), value);
 }
 
+void Shader::setInt(const std::string& name, int value) const {
+    glUniform1i(getUniformLocation(name), value);
+}
+
 GLint Shader::getUniformLocation(const std::string& name) const {
     auto it = uniformCache_.find(name);
     if (it != uniformCache_.end()) {

@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { WasmModule } from "../types/wasm.d.ts";
+import { saveSceneState } from "../lib/storage.ts";
 
 export interface Transform {
   position: [number, number, number];
@@ -87,6 +88,20 @@ export interface RendererBridge {
   setMeshVisible: (index: number, visible: boolean) => void;
   selectMesh: (index: number) => void;
   deselectMesh: () => void;
+  setWireframeMode: (enabled: boolean) => void;
+  loadDiffuseTexture: (data: ArrayBuffer) => void;
+  clearDiffuseTexture: () => void;
+  // Light
+  light: { position: [number, number, number]; color: [number, number, number]; intensity: number; ambientTop: [number, number, number]; ambientBottom: [number, number, number] };
+  setLightPosition: (x: number, y: number, z: number) => void;
+  setLightColor: (r: number, g: number, b: number) => void;
+  setLightIntensity: (v: number) => void;
+  setAmbientTop: (r: number, g: number, b: number) => void;
+  setAmbientBottom: (r: number, g: number, b: number) => void;
+  // UV
+  uvSettings: { tiling: [number, number]; offset: [number, number] };
+  setUVTiling: (u: number, v: number) => void;
+  setUVOffset: (u: number, v: number) => void;
   addCollisionSphere: (x: number, y: number, z: number, radius: number) => void;
   removeCollisionSphere: (index: number) => void;
   pickObject: (ndcX: number, ndcY: number) => number;
@@ -107,6 +122,19 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     baseColor: [0.8, 0.8, 0.8],
     metallic: 0.0,
     roughness: 0.5,
+  });
+
+  const [light, setLight] = useState({
+    position: [5, 8, 5] as [number, number, number],
+    color: [1, 1, 1] as [number, number, number],
+    intensity: 3.0,
+    ambientTop: [0.3, 0.35, 0.45] as [number, number, number],
+    ambientBottom: [0.15, 0.12, 0.1] as [number, number, number],
+  });
+
+  const [uvSettings, setUVSettings] = useState({
+    tiling: [1, 1] as [number, number],
+    offset: [0, 0] as [number, number],
   });
 
   const [meshInfo, setMeshInfo] = useState<MeshInfo>({
@@ -307,6 +335,57 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     setSelectedMeshIndex(-1);
   }, []);
 
+  const setWireframeModeCallback = useCallback((enabled: boolean) => {
+    moduleRef.current?.setWireframeMode(enabled);
+  }, []);
+
+  const loadDiffuseTextureCallback = useCallback((data: ArrayBuffer) => {
+    if (!moduleRef.current) return;
+    const uint8 = new Uint8Array(data);
+    moduleRef.current.loadDiffuseTexture(uint8, uint8.length);
+  }, []);
+
+  const clearDiffuseTextureCallback = useCallback(() => {
+    moduleRef.current?.clearDiffuseTexture();
+  }, []);
+
+  // Light callbacks
+  const setLightPositionCb = useCallback((x: number, y: number, z: number) => {
+    setLight(prev => ({ ...prev, position: [x, y, z] }));
+    moduleRef.current?.setLightPosition(x, y, z);
+  }, []);
+
+  const setLightColorCb = useCallback((r: number, g: number, b: number) => {
+    setLight(prev => ({ ...prev, color: [r, g, b] }));
+    moduleRef.current?.setLightColor(r, g, b);
+  }, []);
+
+  const setLightIntensityCb = useCallback((v: number) => {
+    setLight(prev => ({ ...prev, intensity: v }));
+    moduleRef.current?.setLightIntensity(v);
+  }, []);
+
+  const setAmbientTopCb = useCallback((r: number, g: number, b: number) => {
+    setLight(prev => ({ ...prev, ambientTop: [r, g, b] }));
+    moduleRef.current?.setAmbientTop(r, g, b);
+  }, []);
+
+  const setAmbientBottomCb = useCallback((r: number, g: number, b: number) => {
+    setLight(prev => ({ ...prev, ambientBottom: [r, g, b] }));
+    moduleRef.current?.setAmbientBottom(r, g, b);
+  }, []);
+
+  // UV callbacks
+  const setUVTilingCb = useCallback((u: number, v: number) => {
+    setUVSettings(prev => ({ ...prev, tiling: [u, v] }));
+    moduleRef.current?.setUVTiling(u, v);
+  }, []);
+
+  const setUVOffsetCb = useCallback((u: number, v: number) => {
+    setUVSettings(prev => ({ ...prev, offset: [u, v] }));
+    moduleRef.current?.setUVOffset(u, v);
+  }, []);
+
   const addCollisionSphere = useCallback(
     (x: number, y: number, z: number, radius: number) => {
       moduleRef.current?.addCollisionSphere(x, y, z, radius);
@@ -397,6 +476,29 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     moduleRef.current?.translateCloth(dx, dy, dz);
   }, []);
 
+  // Auto-save scene state to LocalStorage (debounced)
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      saveSceneState({
+        collisionSpheres: simulation.collisionSpheres,
+        clothSettings: {
+          gravity: simulation.gravity,
+          wind: simulation.wind,
+          stiffness: simulation.stiffness,
+          damping: simulation.damping,
+          friction: simulation.friction,
+        },
+        meshTransforms: loadedMeshes,
+        material: {
+          baseColor: material.baseColor,
+          metallic: material.metallic,
+          roughness: material.roughness,
+        },
+      });
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [simulation, loadedMeshes, material]);
+
   return {
     transform,
     material,
@@ -432,6 +534,18 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     setMeshVisible: setMeshVisibleBridge,
     selectMesh,
     deselectMesh,
+    setWireframeMode: setWireframeModeCallback,
+    loadDiffuseTexture: loadDiffuseTextureCallback,
+    clearDiffuseTexture: clearDiffuseTextureCallback,
+    light,
+    setLightPosition: setLightPositionCb,
+    setLightColor: setLightColorCb,
+    setLightIntensity: setLightIntensityCb,
+    setAmbientTop: setAmbientTopCb,
+    setAmbientBottom: setAmbientBottomCb,
+    uvSettings,
+    setUVTiling: setUVTilingCb,
+    setUVOffset: setUVOffsetCb,
     addCollisionSphere,
     removeCollisionSphere,
     pickObject,
