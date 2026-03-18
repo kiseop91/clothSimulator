@@ -1,0 +1,7 @@
+node_modules/
+dist/
+wasm/build/
+public/wasm/
+*.log
+.DS_Store
+.claude/
