@@ -11,6 +11,7 @@ export default function ModelViewer() {
   const dragButtonRef = useRef<number>(-1);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
+  const pinchDistRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
@@ -45,16 +46,17 @@ export default function ModelViewer() {
     return () => observer.disconnect();
   }, [module]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     isDraggingRef.current = true;
     dragButtonRef.current = e.button;
     lastPosRef.current = { x: e.clientX, y: e.clientY };
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     e.preventDefault();
   }, []);
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
       if (!isDraggingRef.current || !module) return;
       const dx = e.clientX - lastPosRef.current.x;
       const dy = e.clientY - lastPosRef.current.y;
@@ -69,8 +71,7 @@ export default function ModelViewer() {
     [module]
   );
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    // Detect click (mouse didn't move much)
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
     const dx = e.clientX - mouseDownPosRef.current.x;
     const dy = e.clientY - mouseDownPosRef.current.y;
     const moved = Math.sqrt(dx * dx + dy * dy);
@@ -85,6 +86,28 @@ export default function ModelViewer() {
     isDraggingRef.current = false;
     dragButtonRef.current = -1;
   }, [bridge]);
+
+  // Pinch zoom for touch
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
+    }
+  }, []);
+
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (!module || e.touches.length !== 2) return;
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const delta = pinchDistRef.current - dist;
+      pinchDistRef.current = dist;
+      module.cameraZoom(delta * 0.05);
+    },
+    [module]
+  );
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -124,10 +147,13 @@ export default function ModelViewer() {
     <div
       ref={containerRef}
       className="relative w-full flex-1 min-h-0 bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 rounded-lg overflow-hidden border border-gray-700"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      style={{ touchAction: 'none' }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerUp}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onWheel={handleWheel}
       onContextMenu={handleContextMenu}
     >

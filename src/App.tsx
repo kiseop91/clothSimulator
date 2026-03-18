@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { Upload, Download, Menu, Sun, Moon, Settings } from "lucide-react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Upload, Download, Menu, Sun, Moon, Settings, FolderOpen, Eye, Cuboid } from "lucide-react";
 import { useRenderer } from "./context/RendererContext.tsx";
 import { loadFile, type LoadedFile } from "./lib/fileLoader.ts";
 import ModelViewer from "./components/ModelViewer.tsx";
@@ -19,6 +19,14 @@ export default function App() {
   const [showProperties, setShowProperties] = useState(true);
   const [darkMode, setDarkMode] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [mobilePanel, setMobilePanel] = useState<'viewer' | 'files' | 'properties'>('viewer');
+
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   const handleUpload = useCallback(
     async (fileList: FileList | null) => {
@@ -72,29 +80,28 @@ export default function App() {
   return (
     <div className="flex flex-col h-full w-full bg-gray-900 text-gray-200">
       {/* Top Toolbar */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between shrink-0">
-        {/* Left Group: Logo + Files */}
-        <div className="flex items-center gap-4">
+      <div className="bg-gray-800 border-b border-gray-700 px-2 md:px-4 py-2 md:py-3 flex items-center justify-between shrink-0">
+        {/* Left Group */}
+        <div className="flex items-center gap-2 md:gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-              <Box3D className="w-5 h-5 text-white" />
+            <div className="w-7 h-7 md:w-8 md:h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+              <Box3D className="w-4 h-4 md:w-5 md:h-5 text-white" />
             </div>
-            <h1 className="text-white font-semibold text-lg">3D Model Viewer</h1>
+            <h1 className="text-white font-semibold text-sm md:text-lg hidden sm:block">3D Viewer</h1>
           </div>
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowFiles(!showFiles)}
-              className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-md transition-colors flex items-center gap-2 cursor-pointer"
-            >
-              <Menu className="w-4 h-4" />
-              Files
-            </button>
-          </div>
+          {/* Desktop: Files toggle */}
+          <button
+            onClick={() => setShowFiles(!showFiles)}
+            className="hidden md:flex px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-md transition-colors items-center gap-2 cursor-pointer"
+          >
+            <Menu className="w-4 h-4" />
+            Files
+          </button>
         </div>
 
-        {/* Right Group: Upload + Export + Divider + Sun + Settings */}
-        <div className="flex items-center gap-3">
+        {/* Right Group */}
+        <div className="flex items-center gap-1 md:gap-3">
           <input
             ref={fileInputRef}
             type="file"
@@ -103,9 +110,17 @@ export default function App() {
             className="hidden"
             onChange={(e) => handleUpload(e.target.files)}
           />
+          {/* Mobile: icon only */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2 font-medium cursor-pointer"
+            className="md:hidden p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors cursor-pointer"
+          >
+            <Upload className="w-4 h-4" />
+          </button>
+          {/* Desktop: full button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="hidden md:flex px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors items-center gap-2 font-medium cursor-pointer"
           >
             <Upload className="w-4 h-4" />
             Upload Model
@@ -113,24 +128,32 @@ export default function App() {
           <button
             onClick={handleExport}
             disabled={!module}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors flex items-center gap-2 font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className="hidden md:flex px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors items-center gap-2 font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             <Download className="w-4 h-4" />
             Export
           </button>
+          {/* Mobile: export icon */}
+          <button
+            onClick={handleExport}
+            disabled={!module}
+            className="md:hidden p-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-40"
+          >
+            <Download className="w-4 h-4" />
+          </button>
 
-          <div className="w-px h-6 bg-gray-700" />
+          <div className="w-px h-6 bg-gray-700 hidden md:block" />
 
           <button
             onClick={() => setDarkMode(!darkMode)}
-            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors cursor-pointer"
+            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors cursor-pointer hidden md:block"
             title="Toggle Theme"
           >
             {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
           <button
             onClick={() => setShowProperties(!showProperties)}
-            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors cursor-pointer"
+            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors cursor-pointer hidden md:block"
             title="Settings"
           >
             <Settings className="w-5 h-5" />
@@ -140,34 +163,82 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - File Panel */}
-        {showFiles && (
-          <div className="w-64 flex-shrink-0">
-            <FilePanel
-              files={files}
-              activeFileId={activeFileId}
-              onFileSelect={handleFileSelect}
-              onDeleteFile={handleDeleteFile}
-              onUploadClick={() => fileInputRef.current?.click()}
-            />
+        {isMobile ? (
+          /* Mobile: single active panel */
+          <div className="flex-1 flex flex-col min-h-0">
+            {/* ModelViewer always mounted — hidden via CSS when inactive */}
+            <div className={mobilePanel === 'viewer' ? 'flex-1 flex flex-col p-1 min-h-0' : 'hidden'}>
+              <ModelViewer />
+            </div>
+            {mobilePanel === 'files' && (
+              <div className="flex-1 overflow-y-auto">
+                <FilePanel
+                  files={files}
+                  activeFileId={activeFileId}
+                  onFileSelect={handleFileSelect}
+                  onDeleteFile={handleDeleteFile}
+                  onUploadClick={() => fileInputRef.current?.click()}
+                />
+              </div>
+            )}
+            {mobilePanel === 'properties' && (
+              <div className="flex-1 overflow-y-auto">
+                <PropertiesPanel />
+              </div>
+            )}
           </div>
-        )}
-
-        {/* Center - 3D Viewport */}
-        <div className="flex-1 flex flex-col p-4 min-h-0">
-          <ModelViewer />
-        </div>
-
-        {/* Right Sidebar - Properties Panel */}
-        {showProperties && (
-          <div className="w-72 flex-shrink-0">
-            <PropertiesPanel />
-          </div>
+        ) : (
+          /* Desktop: 3-panel layout */
+          <>
+            {showFiles && (
+              <div className="w-64 flex-shrink-0">
+                <FilePanel
+                  files={files}
+                  activeFileId={activeFileId}
+                  onFileSelect={handleFileSelect}
+                  onDeleteFile={handleDeleteFile}
+                  onUploadClick={() => fileInputRef.current?.click()}
+                />
+              </div>
+            )}
+            <div className="flex-1 flex flex-col p-4 min-h-0">
+              <ModelViewer />
+            </div>
+            {showProperties && (
+              <div className="w-72 flex-shrink-0">
+                <PropertiesPanel />
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* Bottom Status Bar */}
-      <StatusBar />
+      {/* Mobile Bottom Tab Bar */}
+      {isMobile && (
+        <div className="bg-gray-800 border-t border-gray-700 flex shrink-0">
+          {([
+            { key: 'files' as const, icon: FolderOpen, label: 'Files' },
+            { key: 'viewer' as const, icon: Cuboid, label: 'Viewer' },
+            { key: 'properties' as const, icon: Eye, label: 'Properties' },
+          ]).map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMobilePanel(tab.key)}
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 transition-colors cursor-pointer ${
+                mobilePanel === tab.key
+                  ? 'text-blue-400 bg-gray-700/50'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <tab.icon className="w-5 h-5" />
+              <span className="text-[10px]">{tab.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Desktop Status Bar */}
+      {!isMobile && <StatusBar />}
     </div>
   );
 }
