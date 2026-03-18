@@ -497,13 +497,24 @@ void Renderer::renderFrame() {
             }
         }
 
-        // Cloth (double-sided)
+        // Cloth (two-pass rendering to prevent z-fighting on self-overlap)
+        // Pass 1: back faces with depth offset (pushed back)
+        // Pass 2: front faces on top (always wins depth test over back faces)
         if (clothMesh_ && clothMesh_->isVisible()) {
             setupPBR();
             pbrShader_.setMat4("u_model", glm::mat4(1.0f));
-            glDisable(GL_CULL_FACE);
-            clothMesh_->render();
+
+            // Pass 1: render back faces, pushed slightly into depth buffer
             glEnable(GL_CULL_FACE);
+            glCullFace(GL_FRONT);  // cull front → draw back faces
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, 1.0f);
+            clothMesh_->render();
+            glDisable(GL_POLYGON_OFFSET_FILL);
+
+            // Pass 2: render front faces at true depth
+            glCullFace(GL_BACK);   // cull back → draw front faces
+            clothMesh_->render();
         }
     }
 

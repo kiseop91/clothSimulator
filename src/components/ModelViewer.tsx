@@ -204,7 +204,7 @@ export default function ModelViewer() {
       />
 
       {/* Center placeholder for 3D model */}
-      {!wasmLoading && !wasmError && (
+      {!wasmLoading && !wasmError && bridge.loadedMeshes.length === 0 && !bridge.simulation.clothAdded && bridge.simulation.collisionSpheres.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center space-y-4">
             <div className="w-32 h-32 mx-auto relative">

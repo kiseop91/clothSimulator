@@ -452,11 +452,13 @@ void ClothSimulation::handleCollisions() {
         }
 
         // Ground plane collision (y = 0) with friction
-        if (p.position.y < 0.0f) {
+        // Use small epsilon to prevent z-fighting with grid at y=0
+        constexpr float groundEpsilon = 0.005f;
+        if (p.position.y < groundEpsilon) {
             glm::vec3 velocity = p.position - p.prevPosition;
             glm::vec3 tangentVel(velocity.x * (1.0f - friction_), 0.0f, velocity.z * (1.0f - friction_));
 
-            p.position.y = 0.0f;
+            p.position.y = groundEpsilon;
             p.prevPosition = p.position - tangentVel;
         }
     }
