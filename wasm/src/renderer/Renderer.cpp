@@ -443,12 +443,34 @@ void Renderer::renderFrame() {
     };
 
     if (wireframeMode_) {
-        // Wireframe mode: render with solid color shader
+        // PBR render first (normal)
+        if (!meshes.empty()) {
+            setupPBR();
+            for (auto* mesh : meshes) {
+                if (!mesh->isVisible()) continue;
+                pbrShader_.setMat4("u_model", mesh->getModelMatrix());
+                mesh->render();
+            }
+        }
+        if (clothMesh_ && clothMesh_->isVisible()) {
+            setupPBR();
+            pbrShader_.setMat4("u_model", glm::mat4(1.0f));
+            glDisable(GL_CULL_FACE);
+            clothMesh_->render();
+            glEnable(GL_CULL_FACE);
+        }
+
+        // Wireframe overlay: translucent green on top
         wireShader_.use();
         wireShader_.setMat4("u_view", view);
         wireShader_.setMat4("u_projection", proj);
         GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
-        glUniform4f(colorLoc, 0.4f, 0.8f, 0.4f, 1.0f);
+        glUniform4f(colorLoc, 0.3f, 1.0f, 0.3f, 0.12f);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1.0f, -1.0f);
 
         for (auto* mesh : meshes) {
             if (!mesh->isVisible()) continue;
@@ -461,6 +483,9 @@ void Renderer::renderFrame() {
             clothMesh_->render();
             glEnable(GL_CULL_FACE);
         }
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glDisable(GL_BLEND);
     } else {
         // PBR mode
         if (!meshes.empty()) {

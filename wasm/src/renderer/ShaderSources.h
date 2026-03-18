@@ -125,10 +125,10 @@ void main() {
     vec3 L = normalize(u_lightPos - vWorldPos);
     vec3 H = normalize(V + L);
 
-    // Albedo: texture or base color
-    // Apply UV tiling and offset
+    // Albedo: texture (sRGB→linear) or base color
     vec2 uv = vTexCoord * vec2(u_uvTilingU, u_uvTilingV) + vec2(u_uvOffsetU, u_uvOffsetV);
-    vec3 albedo = u_hasTexture ? texture(u_diffuseMap, uv).rgb : u_baseColor;
+    vec3 texColor = texture(u_diffuseMap, uv).rgb;
+    vec3 albedo = u_hasTexture ? pow(texColor, vec3(2.2)) : u_baseColor;
 
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, u_metallic);
