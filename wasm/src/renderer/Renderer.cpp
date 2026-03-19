@@ -81,8 +81,17 @@ bool Renderer::init(const std::string& canvasId) {
             wgpu::DeviceDescriptor deviceDesc{};
             deviceDesc.SetUncapturedErrorCallback(
                 [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView msg) {
+                    auto* r = getGlobalRenderer();
+                    if (r) r->incrementErrorCount();
                     emscripten_log(EM_LOG_ERROR, "WebGPU error (type=%d): %.*s",
                                    (int)type, (int)msg.length, msg.data);
+                });
+            deviceDesc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
+                [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView msg) {
+                    auto* r = getGlobalRenderer();
+                    if (r) r->setDeviceLost();
+                    emscripten_log(EM_LOG_ERROR, "WebGPU device lost (reason=%d): %.*s",
+                                   (int)reason, (int)msg.length, msg.data);
                 });
 
             adapter_.RequestDevice(
@@ -378,6 +387,18 @@ void Renderer::createPipelines() {
         desc.fragment = nullptr;
 
         shadowPipeline_ = device_.CreateRenderPipeline(&desc);
+
+        // Create shadow bind group once
+        wgpu::BindGroupEntry bgEntry{};
+        bgEntry.binding = 0;
+        bgEntry.buffer = shadowUniformBuffer_;
+        bgEntry.size = sizeof(ShadowUniforms);
+
+        wgpu::BindGroupDescriptor bgDesc2{};
+        bgDesc2.layout = shadowBindGroupLayout_;
+        bgDesc2.entryCount = 1;
+        bgDesc2.entries = &bgEntry;
+        shadowBindGroup_ = device_.CreateBindGroup(&bgDesc2);
     }
 
     // Wire pipeline
@@ -387,16 +408,18 @@ void Renderer::createPipelines() {
         entry.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
         entry.buffer.type = wgpu::BufferBindingType::Uniform;
         entry.buffer.minBindingSize = sizeof(WireUniforms);
-
         wgpu::BindGroupLayoutDescriptor bglDesc{};
         bglDesc.entryCount = 1;
         bglDesc.entries = &entry;
         wireBindGroupLayout_ = device_.CreateBindGroupLayout(&bglDesc);
 
-        wgpu::BufferDescriptor bufDesc{};
-        bufDesc.size = sizeof(WireUniforms);
-        bufDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-        wireUniformBuffer_ = device_.CreateBuffer(&bufDesc);
+        // Create separate uniform buffers per draw slot
+        for (int i = 0; i < MAX_WIRE_DRAWS; i++) {
+            wgpu::BufferDescriptor bufDesc{};
+            bufDesc.size = sizeof(WireUniforms);
+            bufDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+            wireUniformBuffers_[i] = device_.CreateBuffer(&bufDesc);
+        }
 
         wgpu::PipelineLayoutDescriptor plDesc{};
         plDesc.bindGroupLayoutCount = 1;
@@ -431,7 +454,7 @@ void Renderer::createPipelines() {
         wgpu::DepthStencilState depthStencil{};
         depthStencil.format = wgpu::TextureFormat::Depth24Plus;
         depthStencil.depthWriteEnabled = wgpu::OptionalBool::False;
-        depthStencil.depthCompare = wgpu::CompareFunction::Less;
+        depthStencil.depthCompare = wgpu::CompareFunction::Always;
 
         wgpu::RenderPipelineDescriptor desc{};
         desc.layout = layout;
@@ -446,18 +469,19 @@ void Renderer::createPipelines() {
         wirePipeline_ = device_.CreateRenderPipeline(&desc);
     }
 
-    // Wire bind group
-    {
+    // Wire bind groups — each bound to its own independent buffer at offset 0
+    for (int i = 0; i < MAX_WIRE_DRAWS; i++) {
         wgpu::BindGroupEntry entry{};
         entry.binding = 0;
-        entry.buffer = wireUniformBuffer_;
+        entry.buffer = wireUniformBuffers_[i];
+        entry.offset = 0;
         entry.size = sizeof(WireUniforms);
 
         wgpu::BindGroupDescriptor desc{};
         desc.layout = wireBindGroupLayout_;
         desc.entryCount = 1;
         desc.entries = &entry;
-        wireBindGroup_ = device_.CreateBindGroup(&desc);
+        wireBindGroups_[i] = device_.CreateBindGroup(&desc);
     }
 }
 
@@ -520,7 +544,12 @@ void Renderer::createSphereWireframe() {
 }
 
 void Renderer::stepAndRender(double time) {
-    if (!initialized_) return;
+    if (!initialized_ || deviceLost_) {
+        if (deviceLost_) emscripten_cancel_main_loop();
+        return;
+    }
+
+    double frameStart = emscripten_performance_now();
 
     if (clothSim_.isInitialized() && clothSim_.isRunning()) {
         clothSim_.step(time);
@@ -532,6 +561,24 @@ void Renderer::stepAndRender(double time) {
     }
 
     renderFrame();
+
+    diag_.frameTimeMs = static_cast<float>(emscripten_performance_now() - frameStart);
+    diag_.avgFrameTimeMs = diag_.avgFrameTimeMs * 0.95f + diag_.frameTimeMs * 0.05f;
+    frameCount_++;
+
+    // Periodic diagnostics log (~5 seconds at 60fps)
+    if (frameCount_ % 300 == 0) {
+        emscripten_log(EM_LOG_CONSOLE,
+            "[GPU Diag] buffers=%d textures=%d vram=%.1fMB draws=%d frame=%.1fms errors=%d",
+            diag_.bufferCount, diag_.textureCount,
+            diag_.estimatedVram / (1024.0 * 1024.0),
+            diag_.drawCallsPerFrame, diag_.avgFrameTimeMs,
+            diag_.errorCount);
+
+        if (diag_.estimatedVram > 512ULL * 1024 * 1024) {
+            emscripten_log(EM_LOG_WARN, "[GPU Diag] WARNING: estimated VRAM > 512MB!");
+        }
+    }
 }
 
 void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
@@ -551,26 +598,14 @@ void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
     auto pass = encoder.BeginRenderPass(&rpDesc);
     pass.SetPipeline(shadowPipeline_);
 
-    // Shadow bind group
-    wgpu::BindGroupEntry entry{};
-    entry.binding = 0;
-    entry.buffer = shadowUniformBuffer_;
-    entry.size = sizeof(ShadowUniforms);
-
-    wgpu::BindGroupDescriptor bgDesc{};
-    bgDesc.layout = shadowBindGroupLayout_;
-    bgDesc.entryCount = 1;
-    bgDesc.entries = &entry;
-    auto shadowBindGroup = device_.CreateBindGroup(&bgDesc);
-
-    // Render scene meshes
+    // Render scene meshes (reuse shadowBindGroup_ created in createPipelines)
     for (auto* mesh : scene_.getMeshes()) {
         if (!mesh->isVisible()) continue;
         ShadowUniforms su{};
         su.model = mesh->getModelMatrix();
         su.lightSpaceMatrix = lightSpaceMatrix_;
         queue_.WriteBuffer(shadowUniformBuffer_, 0, &su, sizeof(su));
-        pass.SetBindGroup(0, shadowBindGroup);
+        pass.SetBindGroup(0, shadowBindGroup_);
         pass.SetVertexBuffer(0, mesh->getVertexBuffer());
         pass.SetIndexBuffer(mesh->getIndexBuffer(), wgpu::IndexFormat::Uint32);
         pass.DrawIndexed(mesh->getIndexCount());
@@ -582,7 +617,7 @@ void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
         su.model = glm::mat4(1.0f);
         su.lightSpaceMatrix = lightSpaceMatrix_;
         queue_.WriteBuffer(shadowUniformBuffer_, 0, &su, sizeof(su));
-        pass.SetBindGroup(0, shadowBindGroup);
+        pass.SetBindGroup(0, shadowBindGroup_);
         pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
         pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
         pass.DrawIndexed(clothMesh_->getIndexCount());
@@ -598,6 +633,7 @@ void Renderer::renderCollisionSpheres(wgpu::RenderPassEncoder& pass) {
     pass.SetVertexBuffer(0, sphereVbo_);
 
     for (int i = 0; i < (int)collisionSpheres_.size(); i++) {
+        if (wireDrawIndex_ >= MAX_WIRE_DRAWS) break;
         const auto& sphere = collisionSpheres_[i];
         WireUniforms wu{};
         glm::mat4 model = glm::translate(glm::mat4(1.0f), sphere.center);
@@ -610,14 +646,18 @@ void Renderer::renderCollisionSpheres(wgpu::RenderPassEncoder& pass) {
             ? glm::vec4(1.0f, 0.9f, 0.2f, 0.8f)
             : glm::vec4(0.3f, 0.8f, 1.0f, 0.5f);
 
-        queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
-        pass.SetBindGroup(0, wireBindGroup_);
+        queue_.WriteBuffer(wireUniformBuffers_[wireDrawIndex_], 0, &wu, sizeof(wu));
+        pass.SetBindGroup(0, wireBindGroups_[wireDrawIndex_]);
+        wireDrawIndex_++;
+        diag_.drawCallsPerFrame++;
         pass.Draw(sphereVertexCount_);
     }
 }
 
 void Renderer::renderFrame() {
-    if (!initialized_) return;
+    if (!initialized_ || deviceLost_) return;
+    diag_.drawCallsPerFrame = 0;
+    wireDrawIndex_ = 0;
 
     wgpu::SurfaceTexture surfaceTexture;
     surface_.GetCurrentTexture(&surfaceTexture);
@@ -679,19 +719,41 @@ void Renderer::renderFrame() {
         queue_.WriteBuffer(pbrUniformBuffer_, 0, &pu, sizeof(pu));
     };
 
+    // Wireframe diagnostic — log once per toggle
+    {
+        static bool wireLogOnce = false;
+        if (wireframeMode_ && !wireLogOnce) {
+            wireLogOnce = true;
+            for (auto* mesh : scene_.getMeshes()) {
+                emscripten_log(EM_LOG_CONSOLE,
+                    "[Wire Debug] renderFrame: mesh='%s' visible=%d wireCount=%d indexCount=%d",
+                    mesh->getName().c_str(), mesh->isVisible(),
+                    mesh->getWireVertexCount(), mesh->getIndexCount());
+            }
+            if (clothMesh_) {
+                emscripten_log(EM_LOG_CONSOLE,
+                    "[Wire Debug] renderFrame: cloth visible=%d wireCount=%d",
+                    clothMesh_->isVisible(), clothMesh_->getWireVertexCount());
+            }
+        }
+        if (!wireframeMode_) wireLogOnce = false;
+    }
+
     // Scene meshes
     for (auto* mesh : scene_.getMeshes()) {
         if (!mesh->isVisible()) continue;
-        if (wireframeMode_ && mesh->getWireVertexCount() > 0) {
+        if (wireframeMode_ && mesh->getWireVertexCount() > 0 && wireDrawIndex_ < MAX_WIRE_DRAWS) {
             WireUniforms wu{};
             wu.model = mesh->getModelMatrix();
             wu.view = view;
             wu.projection = proj;
             wu.color = glm::vec4(0.0f, 1.0f, 0.5f, 1.0f);
-            queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+            queue_.WriteBuffer(wireUniformBuffers_[wireDrawIndex_], 0, &wu, sizeof(wu));
             pass.SetPipeline(wirePipeline_);
-            pass.SetBindGroup(0, wireBindGroup_);
+            pass.SetBindGroup(0, wireBindGroups_[wireDrawIndex_]);
             pass.SetVertexBuffer(0, mesh->getWireVertexBuffer());
+            wireDrawIndex_++;
+            diag_.drawCallsPerFrame++;
             pass.Draw(mesh->getWireVertexCount());
         } else {
             fillPBR(mesh->getModelMatrix());
@@ -699,22 +761,25 @@ void Renderer::renderFrame() {
             pass.SetBindGroup(0, pbrBindGroup_);
             pass.SetVertexBuffer(0, mesh->getVertexBuffer());
             pass.SetIndexBuffer(mesh->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            diag_.drawCallsPerFrame++;
             pass.DrawIndexed(mesh->getIndexCount());
         }
     }
 
     // Cloth (two-pass or wireframe)
     if (clothMesh_ && clothMesh_->isVisible()) {
-        if (wireframeMode_ && clothMesh_->getWireVertexCount() > 0) {
+        if (wireframeMode_ && clothMesh_->getWireVertexCount() > 0 && wireDrawIndex_ < MAX_WIRE_DRAWS) {
             WireUniforms wu{};
             wu.model = glm::mat4(1.0f);
             wu.view = view;
             wu.projection = proj;
             wu.color = glm::vec4(0.0f, 0.8f, 1.0f, 1.0f);
-            queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+            queue_.WriteBuffer(wireUniformBuffers_[wireDrawIndex_], 0, &wu, sizeof(wu));
             pass.SetPipeline(wirePipeline_);
-            pass.SetBindGroup(0, wireBindGroup_);
+            pass.SetBindGroup(0, wireBindGroups_[wireDrawIndex_]);
             pass.SetVertexBuffer(0, clothMesh_->getWireVertexBuffer());
+            wireDrawIndex_++;
+            diag_.drawCallsPerFrame++;
             pass.Draw(clothMesh_->getWireVertexCount());
         } else {
             fillPBR(glm::mat4(1.0f));
@@ -724,6 +789,7 @@ void Renderer::renderFrame() {
             pass.SetBindGroup(0, pbrBindGroup_);
             pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
             pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            diag_.drawCallsPerFrame++;
             pass.DrawIndexed(clothMesh_->getIndexCount());
 
             // Pass 2: front faces
@@ -731,6 +797,7 @@ void Renderer::renderFrame() {
             pass.SetBindGroup(0, pbrBindGroup_);
             pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
             pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            diag_.drawCallsPerFrame++;
             pass.DrawIndexed(clothMesh_->getIndexCount());
         }
     }
@@ -738,19 +805,21 @@ void Renderer::renderFrame() {
     // Collision spheres
     renderCollisionSpheres(pass);
 
-    // Light sphere
-    if (sphereVertexCount_ > 0) {
-        WireUniforms wu{};
-        wu.model = glm::scale(glm::translate(glm::mat4(1.0f), lightPos_), glm::vec3(0.15f));
-        wu.view = view;
-        wu.projection = proj;
-        wu.color = glm::vec4(1.0f, 1.0f, 0.3f, 0.9f);
-        queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
-        pass.SetPipeline(wirePipeline_);
-        pass.SetBindGroup(0, wireBindGroup_);
-        pass.SetVertexBuffer(0, sphereVbo_);
-        pass.Draw(sphereVertexCount_);
-    }
+    // Light sphere — TEMPORARILY DISABLED FOR DEBUGGING
+    // if (sphereVertexCount_ > 0 && wireDrawIndex_ < MAX_WIRE_DRAWS) {
+    //     WireUniforms wu{};
+    //     wu.model = glm::scale(glm::translate(glm::mat4(1.0f), lightPos_), glm::vec3(0.15f));
+    //     wu.view = view;
+    //     wu.projection = proj;
+    //     wu.color = glm::vec4(1.0f, 1.0f, 0.3f, 0.9f);
+    //     queue_.WriteBuffer(wireUniformBuffers_[wireDrawIndex_], 0, &wu, sizeof(wu));
+    //     pass.SetPipeline(wirePipeline_);
+    //     pass.SetBindGroup(0, wireBindGroups_[wireDrawIndex_]);
+    //     pass.SetVertexBuffer(0, sphereVbo_);
+    //     wireDrawIndex_++;
+    //     diag_.drawCallsPerFrame++;
+    //     pass.Draw(sphereVertexCount_);
+    // }
 
     pass.End();
 
@@ -939,6 +1008,10 @@ void Renderer::resize(int width, int height) {
     config.presentMode = wgpu::PresentMode::Fifo;
     surface_.Configure(&config);
 
+    // Release previous depth texture before creating new one
+    depthView_ = nullptr;
+    depthTexture_ = nullptr;
+
     // Recreate depth texture
     wgpu::TextureDescriptor desc{};
     desc.size = {(uint32_t)width_, (uint32_t)height_, 1};
@@ -950,6 +1023,7 @@ void Renderer::resize(int width, int height) {
 
 void Renderer::destroy() {
     if (!initialized_) return;
+    emscripten_cancel_main_loop();
 
     if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
     collisionSpheres_.clear();

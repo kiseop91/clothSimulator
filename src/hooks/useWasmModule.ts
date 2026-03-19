@@ -17,6 +17,7 @@ export function useWasmModule(): UseWasmModuleResult {
   const [module, setModule] = useState<WasmModule | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const moduleRef = useRef<WasmModule | null>(null);
   const attempted = useRef(false);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export function useWasmModule(): UseWasmModuleResult {
           document.head.appendChild(script);
         });
 
+        moduleRef.current = wasmModule;
         setModule(wasmModule);
       } catch (err) {
         const message =
@@ -71,6 +73,13 @@ export function useWasmModule(): UseWasmModuleResult {
     }
 
     loadWasm();
+
+    return () => {
+      if (moduleRef.current?.destroyRenderer) {
+        moduleRef.current.destroyRenderer();
+        moduleRef.current = null;
+      }
+    };
   }, []);
 
   return { module, loading, error };

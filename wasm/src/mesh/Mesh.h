@@ -47,6 +47,7 @@ private:
     wgpu::Buffer vbo_;
     wgpu::Buffer ebo_;
     wgpu::Buffer wireVbo_;
+    size_t wireVboSize_ = 0;
     int vertexCount_;
     int indexCount_;
     int wireVertexCount_;

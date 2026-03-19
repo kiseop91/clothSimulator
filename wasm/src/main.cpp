@@ -367,6 +367,14 @@ float getCollisionSphereZ(int index) {
     return g_rendererInstance.getCollisionSphereZ(index);
 }
 
+// GPU diagnostics getters
+int getGpuBufferCount() { return g_rendererInstance.getGpuBufferCount(); }
+int getGpuTextureCount() { return g_rendererInstance.getGpuTextureCount(); }
+int getEstimatedVram() { return static_cast<int>(g_rendererInstance.getEstimatedVram()); }
+int getDrawCallCount() { return g_rendererInstance.getDrawCallCount(); }
+float getFrameTimeMs() { return g_rendererInstance.getFrameTimeMs(); }
+int getGpuErrorCount() { return g_rendererInstance.getGpuErrorCount(); }
+
 // ─── Embind Bindings ─────────────────────────────────────────────────
 
 EMSCRIPTEN_BINDINGS(renderer_module) {
@@ -453,4 +461,12 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("getCollisionSphereX", &getCollisionSphereX);
     emscripten::function("getCollisionSphereY", &getCollisionSphereY);
     emscripten::function("getCollisionSphereZ", &getCollisionSphereZ);
+
+    // GPU diagnostics
+    emscripten::function("getGpuBufferCount", &getGpuBufferCount);
+    emscripten::function("getGpuTextureCount", &getGpuTextureCount);
+    emscripten::function("getEstimatedVram", &getEstimatedVram);
+    emscripten::function("getDrawCallCount", &getDrawCallCount);
+    emscripten::function("getFrameTimeMs", &getFrameTimeMs);
+    emscripten::function("getGpuErrorCount", &getGpuErrorCount);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <webgpu/webgpu_cpp.h>
+#include <emscripten.h>
 #include <string>
 #include <memory>
 #include <vector>
@@ -93,8 +94,21 @@ public:
     float getCollisionSphereZ(int index) const;
 
     // Rendering modes
-    void setWireframeMode(bool enabled) { wireframeMode_ = enabled; }
+    void setWireframeMode(bool enabled) {
+        wireframeMode_ = enabled;
+        emscripten_log(EM_LOG_CONSOLE, "[Wire Debug] setWireframeMode: %s", enabled ? "ON" : "OFF");
+    }
     bool getWireframeMode() const { return wireframeMode_; }
+
+    // GPU diagnostics accessors
+    int getGpuBufferCount() const { return diag_.bufferCount; }
+    int getGpuTextureCount() const { return diag_.textureCount; }
+    size_t getEstimatedVram() const { return diag_.estimatedVram; }
+    int getDrawCallCount() const { return diag_.drawCallsPerFrame; }
+    float getFrameTimeMs() const { return diag_.avgFrameTimeMs; }
+    int getGpuErrorCount() const { return diag_.errorCount; }
+    void incrementErrorCount() { diag_.errorCount++; }
+    void setDeviceLost() { deviceLost_ = true; }
 
     // Texture
     void loadDiffuseTexture(const uint8_t* data, int size);
@@ -160,7 +174,6 @@ private:
     // PBR uniform buffer
     wgpu::Buffer pbrUniformBuffer_;
     wgpu::Buffer shadowUniformBuffer_;
-    wgpu::Buffer wireUniformBuffer_;
 
     // Shadow map
     wgpu::Texture shadowTexture_;
@@ -195,10 +208,34 @@ private:
     wgpu::Buffer sphereVbo_;
     int sphereVertexCount_;
     int selectedSphereIndex_;
-    wgpu::BindGroup wireBindGroup_;
-
     // Wireframe mode
     bool wireframeMode_;
+
+    // Separate uniform buffers + bind groups per wire draw
+    static const int MAX_WIRE_DRAWS = 32;
+    int wireDrawIndex_ = 0; // reset each frame
+    wgpu::Buffer wireUniformBuffers_[MAX_WIRE_DRAWS];
+    wgpu::BindGroup wireBindGroups_[MAX_WIRE_DRAWS];
+
+    // Shadow bind group (created once, reused each frame)
+    wgpu::BindGroup shadowBindGroup_;
+
+    // Device lost flag
+    bool deviceLost_ = false;
+
+    // GPU diagnostics
+    struct GpuDiagnostics {
+        int bufferCount = 0;
+        int textureCount = 0;
+        int bindGroupCount = 0;
+        size_t estimatedVram = 0;
+        int drawCallsPerFrame = 0;
+        float frameTimeMs = 0.0f;
+        float avgFrameTimeMs = 0.0f;
+        int errorCount = 0;
+    };
+    GpuDiagnostics diag_;
+    int frameCount_ = 0;
 
     // Light parameters
     glm::vec3 lightPos_ = glm::vec3(5.0f, 8.0f, 5.0f);

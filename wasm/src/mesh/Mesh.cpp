@@ -1,4 +1,5 @@
 #include "mesh/Mesh.h"
+#include <emscripten.h>
 
 Mesh::Mesh()
     : vertexCount_(0), indexCount_(0), wireVertexCount_(0)
@@ -76,11 +77,16 @@ void Mesh::initInternal(wgpu::Device& device, const MeshData& data) {
         desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
         desc.mappedAtCreation = true;
         wireVbo_ = device.CreateBuffer(&desc);
+        wireVboSize_ = desc.size;
 
         void* mapped = wireVbo_.GetMappedRange();
         memcpy(mapped, wireVerts.data(), desc.size);
         wireVbo_.Unmap();
     }
+
+    emscripten_log(EM_LOG_CONSOLE,
+        "[Wire Debug] initInternal: indices=%zu vertices=%zu wireVertexCount=%d wireVboSize=%zu",
+        data.indices.size(), data.vertices.size(), wireVertexCount_, wireVboSize_);
 }
 
 void Mesh::updateVertices(wgpu::Queue& queue, const std::vector<Vertex>& vertices) {
@@ -105,7 +111,15 @@ void Mesh::updateWireVertices(wgpu::Queue& queue, const std::vector<Vertex>& ver
         wireVerts.push_back(pa.x); wireVerts.push_back(pa.y); wireVerts.push_back(pa.z);
     }
     wireVertexCount_ = static_cast<int>(wireVerts.size() / 3);
-    queue.WriteBuffer(wireVbo_, 0, wireVerts.data(), wireVerts.size() * sizeof(float));
+    size_t writeSize = wireVerts.size() * sizeof(float);
+    if (writeSize > wireVboSize_) {
+        emscripten_log(EM_LOG_WARN,
+            "[Wire Debug] updateWireVertices OVERFLOW: writeSize=%zu > wireVboSize=%zu, resetting wireVertexCount to 0",
+            writeSize, wireVboSize_);
+        wireVertexCount_ = 0;
+        return;
+    }
+    queue.WriteBuffer(wireVbo_, 0, wireVerts.data(), writeSize);
 }
 
 glm::mat4 Mesh::getModelMatrix() const {
@@ -122,6 +136,7 @@ void Mesh::cleanup() {
     vbo_ = nullptr;
     ebo_ = nullptr;
     wireVbo_ = nullptr;
+    wireVboSize_ = 0;
     vertexCount_ = 0;
     indexCount_ = 0;
     wireVertexCount_ = 0;
