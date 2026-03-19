@@ -2,269 +2,259 @@
 
 namespace ShaderSources {
 
-// ─── PBR Vertex Shader ───────────────────────────────────────────────
-static const char* pbrVertexShader = R"glsl(#version 300 es
-precision highp float;
+// ─── PBR Shader (Vertex + Fragment combined in WGSL) ─────────────────
+static const char* pbrShader = R"wgsl(
+struct Uniforms {
+    model: mat4x4f,
+    view: mat4x4f,
+    projection: mat4x4f,
+    lightSpaceMatrix: mat4x4f,
+    camPos: vec3f,
+    _pad0: f32,
+    lightPos: vec3f,
+    _pad1: f32,
+    lightColor: vec3f,
+    _pad2: f32,
+    baseColor: vec3f,
+    metallic: f32,
+    ambientTop: vec3f,
+    roughness: f32,
+    ambientBottom: vec3f,
+    shadowEnabled: f32,
+    uvOffset: vec2f,
+    uvTiling: vec2f,
+    hasTexture: f32,
+    _pad3: f32,
+    _pad4: f32,
+    _pad5: f32,
+};
 
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aTexCoord;
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var shadowSampler: sampler_comparison;
+@group(0) @binding(2) var shadowMap: texture_depth_2d;
+@group(0) @binding(3) var diffuseSampler: sampler;
+@group(0) @binding(4) var diffuseMap: texture_2d<f32>;
 
-uniform mat4 u_model;
-uniform mat4 u_view;
-uniform mat4 u_projection;
-uniform mat4 u_lightSpaceMatrix;
+struct VSInput {
+    @location(0) position: vec3f,
+    @location(1) normal: vec3f,
+    @location(2) texCoord: vec2f,
+};
 
-out vec3 vWorldPos;
-out vec3 vNormal;
-out vec2 vTexCoord;
-out vec4 vLightSpacePos;
+struct VSOutput {
+    @builtin(position) position: vec4f,
+    @location(0) worldPos: vec3f,
+    @location(1) normal: vec3f,
+    @location(2) texCoord: vec2f,
+    @location(3) lightSpacePos: vec4f,
+};
 
-void main() {
-    vec4 worldPos = u_model * vec4(aPosition, 1.0);
-    vWorldPos = worldPos.xyz;
-    vNormal = mat3(transpose(inverse(u_model))) * aNormal;
-    vTexCoord = aTexCoord;
-    vLightSpacePos = u_lightSpaceMatrix * worldPos;
-    gl_Position = u_projection * u_view * worldPos;
-}
-)glsl";
+@vertex
+fn vs_main(in: VSInput) -> VSOutput {
+    var out: VSOutput;
+    let worldPos = u.model * vec4f(in.position, 1.0);
+    out.worldPos = worldPos.xyz;
 
-// ─── PBR Fragment Shader (Cook-Torrance + Shadow + Texture + Hemisphere) ──
-static const char* pbrFragmentShader = R"glsl(#version 300 es
-precision highp float;
-
-in vec3 vWorldPos;
-in vec3 vNormal;
-in vec2 vTexCoord;
-in vec4 vLightSpacePos;
-
-uniform vec3 u_baseColor;
-uniform float u_metallic;
-uniform float u_roughness;
-uniform vec3 u_camPos;
-uniform vec3 u_lightPos;
-uniform vec3 u_lightColor;
-
-// Shadow
-uniform sampler2D u_shadowMap;
-uniform bool u_shadowEnabled;
-
-// Texture
-uniform sampler2D u_diffuseMap;
-uniform bool u_hasTexture;
-
-// Hemisphere ambient
-uniform vec3 u_ambientTop;
-uniform vec3 u_ambientBottom;
-
-// UV transform
-uniform float u_uvOffsetU;
-uniform float u_uvOffsetV;
-uniform float u_uvTilingU;
-uniform float u_uvTilingV;
-
-out vec4 fragColor;
-
-const float PI = 3.14159265359;
-
-float distributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    return a2 / max(denom, 0.0001);
+    // Normal matrix = transpose(inverse(model)) — for uniform scale, just use mat3
+    let normalMat = mat3x3f(
+        u.model[0].xyz,
+        u.model[1].xyz,
+        u.model[2].xyz
+    );
+    out.normal = normalMat * in.normal;
+    out.texCoord = in.texCoord;
+    out.lightSpacePos = u.lightSpaceMatrix * worldPos;
+    out.position = u.projection * u.view * worldPos;
+    return out;
 }
 
-float geometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
+const PI: f32 = 3.14159265359;
+
+fn distributionGGX(N: vec3f, H: vec3f, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let NdotH = max(dot(N, H), 0.0);
+    let NdotH2 = NdotH * NdotH;
+    let denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    return a2 / max(PI * denom * denom, 0.0001);
+}
+
+fn geometrySchlickGGX(NdotV: f32, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
     return NdotV / (NdotV * (1.0 - k) + k);
 }
 
-float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
+fn geometrySmith(N: vec3f, V: vec3f, L: vec3f, roughness: f32) -> f32 {
+    let NdotV = max(dot(N, V), 0.0);
+    let NdotL = max(dot(N, L), 0.0);
     return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
 }
 
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+fn fresnelSchlick(cosTheta: f32, F0: vec3f) -> vec3f {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// PCF Shadow Sampling
-float calcShadow(vec4 lightSpacePos, vec3 N, vec3 L) {
-    if (!u_shadowEnabled) return 0.0;
+fn calcShadow(lightSpacePos: vec4f, N: vec3f, L: vec3f) -> f32 {
+    if (u.shadowEnabled < 0.5) { return 0.0; }
 
-    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
-    projCoords = projCoords * 0.5 + 0.5;
+    let projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    let uv = projCoords.xy * 0.5 + 0.5;
+    let depth = projCoords.z * 0.5 + 0.5;
 
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
-        projCoords.y < 0.0 || projCoords.y > 1.0) return 0.0;
+    let bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
+    let currentDepth = depth - bias;
 
-    float bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
-    float currentDepth = projCoords.z;
-
-    // PCF 3x3
-    float shadow = 0.0;
-    vec2 texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
-            float pcfDepth = texture(u_shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
-            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+    // PCF 3x3 — textureSampleCompare must be called from uniform control flow
+    let texelSize = vec2f(1.0 / 1024.0, 1.0 / 1024.0);
+    var shadow: f32 = 0.0;
+    for (var x: i32 = -1; x <= 1; x++) {
+        for (var y: i32 = -1; y <= 1; y++) {
+            let offset = vec2f(f32(x), f32(y)) * texelSize;
+            shadow += textureSampleCompare(shadowMap, shadowSampler, uv + offset, currentDepth);
         }
     }
-    return shadow / 9.0;
+    shadow = 1.0 - shadow / 9.0;
+
+    // Apply out-of-bounds check post-hoc via select (no non-uniform branching)
+    let outOfBounds = depth > 1.0 || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    return select(shadow, 0.0, outOfBounds);
 }
 
-void main() {
-    vec3 N = normalize(vNormal);
-    vec3 V = normalize(u_camPos - vWorldPos);
-    vec3 L = normalize(u_lightPos - vWorldPos);
-    vec3 H = normalize(V + L);
+@fragment
+fn fs_main(in: VSOutput) -> @location(0) vec4f {
+    let N = normalize(in.normal);
+    let V = normalize(u.camPos - in.worldPos);
+    let L = normalize(u.lightPos - in.worldPos);
+    let H = normalize(V + L);
 
     // Albedo: texture (sRGB→linear) or base color
-    vec2 uv = vTexCoord * vec2(u_uvTilingU, u_uvTilingV) + vec2(u_uvOffsetU, u_uvOffsetV);
-    vec3 texColor = texture(u_diffuseMap, uv).rgb;
-    vec3 albedo = u_hasTexture ? pow(texColor, vec3(2.2)) : u_baseColor;
-
-    vec3 F0 = vec3(0.04);
-    F0 = mix(F0, albedo, u_metallic);
-
-    // Cook-Torrance BRDF
-    float NDF = distributionGGX(N, H, u_roughness);
-    float G = geometrySmith(N, V, L, u_roughness);
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-    vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-    vec3 specular = numerator / denominator;
-
-    vec3 kS = F;
-    vec3 kD = (vec3(1.0) - kS) * (1.0 - u_metallic);
-
-    float NdotL = max(dot(N, L), 0.0);
-
-    float dist = length(u_lightPos - vWorldPos);
-    float attenuation = 1.0 / (1.0 + 0.001 * dist * dist);
-    vec3 radiance = u_lightColor * attenuation;
-
-    // Shadow
-    float shadow = calcShadow(vLightSpacePos, N, L);
-
-    vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow);
-
-    // Hemisphere ambient
-    float hemisphereWeight = dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
-    vec3 ambient = mix(u_ambientBottom, u_ambientTop, hemisphereWeight) * albedo;
-
-    vec3 color = ambient + Lo;
-
-    // Gamma correction
-    color = pow(color, vec3(1.0 / 2.2));
-
-    fragColor = vec4(color, 1.0);
-}
-)glsl";
-
-// ─── Shadow Depth Vertex Shader ─────────────────────────────────────
-static const char* shadowVertexShader = R"glsl(#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 aPosition;
-
-uniform mat4 u_model;
-uniform mat4 u_lightSpaceMatrix;
-
-void main() {
-    gl_Position = u_lightSpaceMatrix * u_model * vec4(aPosition, 1.0);
-}
-)glsl";
-
-// ─── Shadow Depth Fragment Shader ───────────────────────────────────
-static const char* shadowFragmentShader = R"glsl(#version 300 es
-precision highp float;
-
-out vec4 fragColor;
-
-void main() {
-    fragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
-}
-)glsl";
-
-// ─── Grid Vertex Shader ──────────────────────────────────────────────
-static const char* gridVertexShader = R"glsl(#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 aPosition;
-
-uniform mat4 u_view;
-uniform mat4 u_projection;
-
-out vec3 vPos;
-
-void main() {
-    vPos = aPosition;
-    gl_Position = u_projection * u_view * vec4(aPosition, 1.0);
-}
-)glsl";
-
-// ─── Grid Fragment Shader ────────────────────────────────────────────
-static const char* gridFragmentShader = R"glsl(#version 300 es
-precision highp float;
-
-in vec3 vPos;
-
-out vec4 fragColor;
-
-void main() {
-    float dist = length(vPos.xz);
-    float fade = 1.0 - smoothstep(5.0, 12.0, dist);
-
-    bool isAxisX = (abs(vPos.z) < 0.05);
-    bool isAxisZ = (abs(vPos.x) < 0.05);
-
-    vec3 color;
-    if (isAxisX) {
-        color = vec3(0.6, 0.2, 0.2);
-    } else if (isAxisZ) {
-        color = vec3(0.2, 0.2, 0.6);
+    let uv = in.texCoord * u.uvTiling + u.uvOffset;
+    let texColor = textureSample(diffuseMap, diffuseSampler, uv).rgb;
+    var albedo: vec3f;
+    if (u.hasTexture > 0.5) {
+        albedo = pow(texColor, vec3f(2.2));
     } else {
-        color = vec3(0.35, 0.35, 0.40);
+        albedo = u.baseColor;
     }
 
-    fragColor = vec4(color, fade * 0.7);
+    var F0 = vec3f(0.04);
+    F0 = mix(F0, albedo, u.metallic);
+
+    // Cook-Torrance BRDF
+    let NDF = distributionGGX(N, H, u.roughness);
+    let G = geometrySmith(N, V, L, u.roughness);
+    let F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    let numerator = NDF * G * F;
+    let denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    let specular = numerator / denominator;
+
+    let kS = F;
+    let kD = (vec3f(1.0) - kS) * (1.0 - u.metallic);
+
+    let NdotL = max(dot(N, L), 0.0);
+
+    let dist = length(u.lightPos - in.worldPos);
+    let attenuation = 1.0 / (1.0 + 0.001 * dist * dist);
+    let radiance = u.lightColor * attenuation;
+
+    // Shadow
+    let shadow = calcShadow(in.lightSpacePos, N, L);
+
+    let Lo = (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow);
+
+    // Hemisphere ambient
+    let hemisphereWeight = dot(N, vec3f(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+    let ambient = mix(u.ambientBottom, u.ambientTop, hemisphereWeight) * albedo;
+
+    var color = ambient + Lo;
+
+    // Gamma correction
+    color = pow(color, vec3f(1.0 / 2.2));
+
+    return vec4f(color, 1.0);
 }
-)glsl";
+)wgsl";
 
-// ─── Wireframe Vertex Shader ────────────────────────────────────────
-static const char* wireVertexShader = R"glsl(#version 300 es
-precision highp float;
+// ─── Shadow Depth Shader ─────────────────────────────────────────────
+static const char* shadowShader = R"wgsl(
+struct ShadowUniforms {
+    model: mat4x4f,
+    lightSpaceMatrix: mat4x4f,
+};
 
-layout(location = 0) in vec3 aPosition;
+@group(0) @binding(0) var<uniform> u: ShadowUniforms;
 
-uniform mat4 u_model;
-uniform mat4 u_view;
-uniform mat4 u_projection;
-
-void main() {
-    gl_Position = u_projection * u_view * u_model * vec4(aPosition, 1.0);
+@vertex
+fn vs_main(@location(0) position: vec3f) -> @builtin(position) vec4f {
+    return u.lightSpaceMatrix * u.model * vec4f(position, 1.0);
 }
-)glsl";
+)wgsl";
 
-// ─── Wireframe Fragment Shader ──────────────────────────────────────
-static const char* wireFragmentShader = R"glsl(#version 300 es
-precision highp float;
+// ─── Grid Shader ─────────────────────────────────────────────────────
+static const char* gridShader = R"wgsl(
+struct GridUniforms {
+    view: mat4x4f,
+    projection: mat4x4f,
+};
 
-uniform vec4 u_color;
+@group(0) @binding(0) var<uniform> u: GridUniforms;
 
-out vec4 fragColor;
+struct VSOutput {
+    @builtin(position) position: vec4f,
+    @location(0) worldPos: vec3f,
+};
 
-void main() {
-    fragColor = u_color;
+@vertex
+fn vs_main(@location(0) pos: vec3f) -> VSOutput {
+    var out: VSOutput;
+    out.worldPos = pos;
+    out.position = u.projection * u.view * vec4f(pos, 1.0);
+    return out;
 }
-)glsl";
+
+@fragment
+fn fs_main(in: VSOutput) -> @location(0) vec4f {
+    let dist = length(in.worldPos.xz);
+    let fade = 1.0 - smoothstep(5.0, 12.0, dist);
+
+    let isAxisX = abs(in.worldPos.z) < 0.05;
+    let isAxisZ = abs(in.worldPos.x) < 0.05;
+
+    var color: vec3f;
+    if (isAxisX) {
+        color = vec3f(0.6, 0.2, 0.2);
+    } else if (isAxisZ) {
+        color = vec3f(0.2, 0.2, 0.6);
+    } else {
+        color = vec3f(0.35, 0.35, 0.40);
+    }
+
+    return vec4f(color, fade * 0.7);
+}
+)wgsl";
+
+// ─── Wireframe Shader ────────────────────────────────────────────────
+static const char* wireShader = R"wgsl(
+struct WireUniforms {
+    model: mat4x4f,
+    view: mat4x4f,
+    projection: mat4x4f,
+    color: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> u: WireUniforms;
+
+@vertex
+fn vs_main(@location(0) position: vec3f) -> @builtin(position) vec4f {
+    return u.projection * u.view * u.model * vec4f(position, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4f {
+    return u.color;
+}
+)wgsl";
 
 } // namespace ShaderSources

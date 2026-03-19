@@ -1,6 +1,6 @@
 #pragma once
 
-#include <GLES3/gl3.h>
+#include <webgpu/webgpu_cpp.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include "mesh/MeshData.h"
@@ -11,14 +11,17 @@ public:
     Mesh();
     ~Mesh();
 
-    void init(const MeshData& data);
-    void initDynamic(const MeshData& data);
-    void updateVertices(const std::vector<Vertex>& vertices);
-    void render();
-    void cleanup();
+    void init(wgpu::Device& device, const MeshData& data);
+    void initDynamic(wgpu::Device& device, const MeshData& data);
+    void updateVertices(wgpu::Queue& queue, const std::vector<Vertex>& vertices);
+    void updateWireVertices(wgpu::Queue& queue, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
+    wgpu::Buffer getVertexBuffer() const { return vbo_; }
+    wgpu::Buffer getIndexBuffer() const { return ebo_; }
+    wgpu::Buffer getWireVertexBuffer() const { return wireVbo_; }
     int getVertexCount() const { return vertexCount_; }
     int getIndexCount() const { return indexCount_; }
+    int getWireVertexCount() const { return wireVertexCount_; }
     bool isDynamic() const { return dynamic_; }
 
     void setName(const std::string& name) { name_ = name; }
@@ -36,14 +39,17 @@ public:
     const glm::vec3& getMeshScale() const { return scale_; }
     glm::mat4 getModelMatrix() const;
 
-private:
-    void initInternal(const MeshData& data, GLenum vboUsage);
+    void cleanup();
 
-    GLuint vao_;
-    GLuint vbo_;
-    GLuint ebo_;
+private:
+    void initInternal(wgpu::Device& device, const MeshData& data);
+
+    wgpu::Buffer vbo_;
+    wgpu::Buffer ebo_;
+    wgpu::Buffer wireVbo_;
     int vertexCount_;
     int indexCount_;
+    int wireVertexCount_;
     std::string name_;
     bool visible_;
     bool dynamic_;

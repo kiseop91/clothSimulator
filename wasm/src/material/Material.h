@@ -1,13 +1,10 @@
 #pragma once
 
 #include <glm/glm.hpp>
-#include "renderer/Shader.h"
 
 class Material {
 public:
     Material();
-
-    void apply(const Shader& shader) const;
 
     void setBaseColor(float r, float g, float b);
     void setMetallic(float v);

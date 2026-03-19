@@ -1,5 +1,6 @@
 #pragma once
 
+#include <webgpu/webgpu_cpp.h>
 #include <string>
 #include <memory>
 #include <vector>
@@ -9,6 +10,36 @@
 #include "scene/Grid.h"
 #include "simulation/ClothSimulation.h"
 #include "simulation/CollisionBody.h"
+
+// PBR uniform block — must match WGSL struct layout
+struct PBRUniforms {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::mat4 lightSpaceMatrix;
+    glm::vec3 camPos;       float _pad0;
+    glm::vec3 lightPos;     float _pad1;
+    glm::vec3 lightColor;   float _pad2;
+    glm::vec3 baseColor;    float metallic;
+    glm::vec3 ambientTop;   float roughness;
+    glm::vec3 ambientBottom; float shadowEnabled;
+    glm::vec2 uvOffset;
+    glm::vec2 uvTiling;
+    float hasTexture;
+    float _pad3, _pad4, _pad5;
+};
+
+struct ShadowUniforms {
+    glm::mat4 model;
+    glm::mat4 lightSpaceMatrix;
+};
+
+struct WireUniforms {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 projection;
+    glm::vec4 color;
+};
 
 class Renderer {
 public:
@@ -81,22 +112,76 @@ public:
     void setUVOffset(float u, float v) { uvOffset_ = glm::vec2(u, v); }
     void setUVTiling(float u, float v) { uvTiling_ = glm::vec2(u, v); }
 
+    // WebGPU accessors for Mesh creation
+    wgpu::Device& getDevice() { return device_; }
+    wgpu::Queue& getQueue() { return queue_; }
+
 private:
-    bool initShaders();
-    void initSphereWireframe();
-    void initShadowMap();
-    void renderShadowPass();
-    void renderCollisionSpheres(const glm::mat4& view, const glm::mat4& proj);
+    void createPipelines();
+    void createShadowResources();
+    void createSphereWireframe();
+    void createDummyTexture();
+    void renderShadowPass(wgpu::CommandEncoder& encoder);
+    void renderCollisionSpheres(wgpu::RenderPassEncoder& pass);
     void syncCollidersToSim();
 
     int width_;
     int height_;
-    int contextHandle_;
     bool initialized_;
 
+    // WebGPU core
+    wgpu::Instance instance_;
+    wgpu::Adapter adapter_;
+    wgpu::Device device_;
+    wgpu::Queue queue_;
+    wgpu::Surface surface_;
+    wgpu::TextureFormat surfaceFormat_;
+
+    // Depth
+    wgpu::Texture depthTexture_;
+    wgpu::TextureView depthView_;
+
+    // Shaders
     Shader pbrShader_;
-    Shader wireShader_;
     Shader shadowShader_;
+    Shader wireShader_;
+
+    // Pipelines
+    wgpu::RenderPipeline pbrPipeline_;
+    wgpu::RenderPipeline pbrBackfacePipeline_;
+    wgpu::RenderPipeline wirePipeline_;
+    wgpu::RenderPipeline shadowPipeline_;
+
+    // Bind group layouts
+    wgpu::BindGroupLayout pbrBindGroupLayout_;
+    wgpu::BindGroupLayout shadowBindGroupLayout_;
+    wgpu::BindGroupLayout wireBindGroupLayout_;
+
+    // PBR uniform buffer
+    wgpu::Buffer pbrUniformBuffer_;
+    wgpu::Buffer shadowUniformBuffer_;
+    wgpu::Buffer wireUniformBuffer_;
+
+    // Shadow map
+    wgpu::Texture shadowTexture_;
+    wgpu::TextureView shadowTextureView_;
+    wgpu::Sampler shadowSampler_;
+    int shadowMapSize_;
+    glm::mat4 lightSpaceMatrix_;
+
+    // Diffuse texture
+    wgpu::Texture diffuseTexture_;
+    wgpu::TextureView diffuseTextureView_;
+    wgpu::Sampler diffuseSampler_;
+    bool hasTexture_;
+    wgpu::Texture dummyTexture_;
+    wgpu::TextureView dummyTextureView_;
+
+    // PBR bind group (rebuilt when texture changes)
+    wgpu::BindGroup pbrBindGroup_;
+    void rebuildPBRBindGroup();
+
+    // Scene
     Scene scene_;
     Camera camera_;
     Grid grid_;
@@ -107,23 +192,13 @@ private:
 
     // Collision sphere visualization
     std::vector<CollisionBody> collisionSpheres_;
-    GLuint sphereVao_;
-    GLuint sphereVbo_;
+    wgpu::Buffer sphereVbo_;
     int sphereVertexCount_;
     int selectedSphereIndex_;
-
-    // Shadow mapping
-    GLuint shadowFBO_;
-    GLuint shadowDepthTexture_;
-    int shadowMapSize_;
-    glm::mat4 lightSpaceMatrix_;
+    wgpu::BindGroup wireBindGroup_;
 
     // Wireframe mode
     bool wireframeMode_;
-
-    // Diffuse texture
-    GLuint diffuseTexture_;
-    bool hasTexture_;
 
     // Light parameters
     glm::vec3 lightPos_ = glm::vec3(5.0f, 8.0f, 5.0f);

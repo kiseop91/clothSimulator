@@ -1,8 +1,7 @@
 #include "mesh/Mesh.h"
 
 Mesh::Mesh()
-    : vao_(0), vbo_(0), ebo_(0)
-    , vertexCount_(0), indexCount_(0)
+    : vertexCount_(0), indexCount_(0), wireVertexCount_(0)
     , visible_(true), dynamic_(false)
 {
 }
@@ -11,73 +10,102 @@ Mesh::~Mesh() {
     cleanup();
 }
 
-void Mesh::init(const MeshData& data) {
-    initInternal(data, GL_STATIC_DRAW);
+void Mesh::init(wgpu::Device& device, const MeshData& data) {
+    dynamic_ = false;
+    initInternal(device, data);
 }
 
-void Mesh::initDynamic(const MeshData& data) {
+void Mesh::initDynamic(wgpu::Device& device, const MeshData& data) {
     dynamic_ = true;
-    initInternal(data, GL_DYNAMIC_DRAW);
+    initInternal(device, data);
 }
 
-void Mesh::initInternal(const MeshData& data, GLenum vboUsage) {
+void Mesh::initInternal(wgpu::Device& device, const MeshData& data) {
     vertexCount_ = static_cast<int>(data.vertices.size());
     indexCount_ = static_cast<int>(data.indices.size());
 
-    glGenVertexArrays(1, &vao_);
-    glGenBuffers(1, &vbo_);
-    glGenBuffers(1, &ebo_);
+    // Vertex buffer
+    {
+        wgpu::BufferDescriptor desc{};
+        desc.size = data.vertices.size() * sizeof(Vertex);
+        desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+        desc.mappedAtCreation = true;
+        vbo_ = device.CreateBuffer(&desc);
 
-    glBindVertexArray(vao_);
+        void* mapped = vbo_.GetMappedRange();
+        memcpy(mapped, data.vertices.data(), desc.size);
+        vbo_.Unmap();
+    }
 
-    // Upload vertex data
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER,
-                 data.vertices.size() * sizeof(Vertex),
-                 data.vertices.data(),
-                 vboUsage);
+    // Index buffer
+    {
+        wgpu::BufferDescriptor desc{};
+        desc.size = data.indices.size() * sizeof(uint32_t);
+        desc.usage = wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst;
+        desc.mappedAtCreation = true;
+        ebo_ = device.CreateBuffer(&desc);
 
-    // Upload index data (always static - topology doesn't change)
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 data.indices.size() * sizeof(uint32_t),
-                 data.indices.data(),
-                 GL_STATIC_DRAW);
+        void* mapped = ebo_.GetMappedRange();
+        memcpy(mapped, data.indices.data(), desc.size);
+        ebo_.Unmap();
+    }
 
-    // aPosition at location 0
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, position));
+    // Wireframe position-only VBO (stride=12, LineList)
+    {
+        std::vector<float> wireVerts;
+        wireVerts.reserve((data.indices.size() / 3) * 18);
+        for (size_t i = 0; i + 2 < data.indices.size(); i += 3) {
+            uint32_t a = data.indices[i], b = data.indices[i+1], c = data.indices[i+2];
+            const auto& pa = data.vertices[a].position;
+            const auto& pb = data.vertices[b].position;
+            const auto& pc = data.vertices[c].position;
+            // edge a-b
+            wireVerts.push_back(pa.x); wireVerts.push_back(pa.y); wireVerts.push_back(pa.z);
+            wireVerts.push_back(pb.x); wireVerts.push_back(pb.y); wireVerts.push_back(pb.z);
+            // edge b-c
+            wireVerts.push_back(pb.x); wireVerts.push_back(pb.y); wireVerts.push_back(pb.z);
+            wireVerts.push_back(pc.x); wireVerts.push_back(pc.y); wireVerts.push_back(pc.z);
+            // edge c-a
+            wireVerts.push_back(pc.x); wireVerts.push_back(pc.y); wireVerts.push_back(pc.z);
+            wireVerts.push_back(pa.x); wireVerts.push_back(pa.y); wireVerts.push_back(pa.z);
+        }
+        wireVertexCount_ = static_cast<int>(wireVerts.size() / 3);
 
-    // aNormal at location 1
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, normal));
+        wgpu::BufferDescriptor desc{};
+        desc.size = wireVerts.size() * sizeof(float);
+        desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+        desc.mappedAtCreation = true;
+        wireVbo_ = device.CreateBuffer(&desc);
 
-    // aTexCoord at location 2
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          (void*)offsetof(Vertex, texCoord));
-
-    glBindVertexArray(0);
+        void* mapped = wireVbo_.GetMappedRange();
+        memcpy(mapped, wireVerts.data(), desc.size);
+        wireVbo_.Unmap();
+    }
 }
 
-void Mesh::updateVertices(const std::vector<Vertex>& vertices) {
-    if (!dynamic_ || vbo_ == 0) return;
-
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0,
-                    vertices.size() * sizeof(Vertex),
-                    vertices.data());
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+void Mesh::updateVertices(wgpu::Queue& queue, const std::vector<Vertex>& vertices) {
+    if (!dynamic_ || !vbo_) return;
+    queue.WriteBuffer(vbo_, 0, vertices.data(), vertices.size() * sizeof(Vertex));
 }
 
-void Mesh::render() {
-    if (!visible_ || indexCount_ == 0) return;
-
-    glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, 0);
-    glBindVertexArray(0);
+void Mesh::updateWireVertices(wgpu::Queue& queue, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+    if (!dynamic_ || !wireVbo_) return;
+    std::vector<float> wireVerts;
+    wireVerts.reserve((indices.size() / 3) * 18);
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        uint32_t a = indices[i], b = indices[i+1], c = indices[i+2];
+        const auto& pa = vertices[a].position;
+        const auto& pb = vertices[b].position;
+        const auto& pc = vertices[c].position;
+        wireVerts.push_back(pa.x); wireVerts.push_back(pa.y); wireVerts.push_back(pa.z);
+        wireVerts.push_back(pb.x); wireVerts.push_back(pb.y); wireVerts.push_back(pb.z);
+        wireVerts.push_back(pb.x); wireVerts.push_back(pb.y); wireVerts.push_back(pb.z);
+        wireVerts.push_back(pc.x); wireVerts.push_back(pc.y); wireVerts.push_back(pc.z);
+        wireVerts.push_back(pc.x); wireVerts.push_back(pc.y); wireVerts.push_back(pc.z);
+        wireVerts.push_back(pa.x); wireVerts.push_back(pa.y); wireVerts.push_back(pa.z);
+    }
+    wireVertexCount_ = static_cast<int>(wireVerts.size() / 3);
+    queue.WriteBuffer(wireVbo_, 0, wireVerts.data(), wireVerts.size() * sizeof(float));
 }
 
 glm::mat4 Mesh::getModelMatrix() const {
@@ -91,9 +119,10 @@ glm::mat4 Mesh::getModelMatrix() const {
 }
 
 void Mesh::cleanup() {
-    if (ebo_) { glDeleteBuffers(1, &ebo_); ebo_ = 0; }
-    if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
-    if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
+    vbo_ = nullptr;
+    ebo_ = nullptr;
+    wireVbo_ = nullptr;
     vertexCount_ = 0;
     indexCount_ = 0;
+    wireVertexCount_ = 0;
 }

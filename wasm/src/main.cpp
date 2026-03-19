@@ -68,7 +68,7 @@ bool loadModel(const emscripten::val& jsData, int size, const std::string& ext) 
     int totalTris = 0;
     for (auto& meshData : meshes) {
         Mesh* mesh = new Mesh();
-        mesh->init(meshData);
+        mesh->init(g_rendererInstance.getDevice(), meshData);
         mesh->setName("mesh_" + std::to_string(g_rendererInstance.getScene().getMeshes().size()));
         g_rendererInstance.getScene().addMesh(mesh);
         g_rendererInstance.getScene().addMeshData(meshData);

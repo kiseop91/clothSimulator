@@ -24,15 +24,14 @@ target_include_directories(renderer PRIVATE
 # Note: TINYOBJLOADER_IMPLEMENTATION, TINYGLTF_IMPLEMENTATION, STB_IMAGE_IMPLEMENTATION,
 # STB_IMAGE_WRITE_IMPLEMENTATION are defined in individual .cpp files to avoid ODR violations
 
-# Compile flags for Emscripten (USE_ZLIB needed for libdeflate wrapper)
-target_compile_options(renderer PRIVATE -sUSE_ZLIB=1)
+# Compile flags for Emscripten
+target_compile_options(renderer PRIVATE -sUSE_ZLIB=1 --use-port=emdawnwebgpu)
 
 # Emscripten link flags
 set_target_properties(renderer PROPERTIES
     SUFFIX ".js"
     LINK_FLAGS "\
-        -s USE_WEBGL2=1 \
-        -s FULL_ES3=1 \
+        --use-port=emdawnwebgpu \
         -s USE_ZLIB=1 \
         -s MODULARIZE=1 \
         -s EXPORT_NAME='createRenderer' \

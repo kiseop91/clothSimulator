@@ -7,12 +7,6 @@ Material::Material()
 {
 }
 
-void Material::apply(const Shader& shader) const {
-    shader.setVec3("u_baseColor", baseColor_);
-    shader.setFloat("u_metallic", metallic_);
-    shader.setFloat("u_roughness", roughness_);
-}
-
 void Material::setBaseColor(float r, float g, float b) {
     baseColor_ = glm::vec3(r, g, b);
 }

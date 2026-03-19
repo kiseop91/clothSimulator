@@ -3,7 +3,6 @@
 
 #include "../../third_party/tinygltf/stb_image.h"
 
-#include <GLES3/gl3.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -12,6 +11,7 @@
 #include <string>
 #include <cstdlib>
 #include <cmath>
+#include <cstring>
 
 // Base64 encoding table
 static const char base64Chars[] =
@@ -20,45 +20,40 @@ static const char base64Chars[] =
 static std::string base64Encode(const std::vector<uint8_t>& data) {
     std::string result;
     result.reserve(((data.size() + 2) / 3) * 4);
-
     for (size_t i = 0; i < data.size(); i += 3) {
         uint32_t b = (static_cast<uint32_t>(data[i]) << 16);
         if (i + 1 < data.size()) b |= (static_cast<uint32_t>(data[i + 1]) << 8);
         if (i + 2 < data.size()) b |= static_cast<uint32_t>(data[i + 2]);
-
         result.push_back(base64Chars[(b >> 18) & 0x3F]);
         result.push_back(base64Chars[(b >> 12) & 0x3F]);
         result.push_back((i + 1 < data.size()) ? base64Chars[(b >> 6) & 0x3F] : '=');
         result.push_back((i + 2 < data.size()) ? base64Chars[b & 0x3F] : '=');
     }
-
     return result;
 }
 
 // Global renderer pointer for animation callback
 static Renderer* g_renderer = nullptr;
-
 Renderer* getGlobalRenderer() { return g_renderer; }
 void setGlobalRenderer(Renderer* r) { g_renderer = r; }
 
 // Animation frame callback
-static EM_BOOL animFrameCallback(double time, void* userData) {
+static void animFrameCallback(void* userData) {
     Renderer* renderer = static_cast<Renderer*>(userData);
     if (renderer) {
-        renderer->stepAndRender(time);
+        renderer->stepAndRender(emscripten_performance_now());
     }
-    return EM_TRUE; // Keep looping
 }
 
 Renderer::Renderer()
     : width_(800), height_(600)
-    , contextHandle_(0)
     , initialized_(false)
+    , surfaceFormat_(wgpu::TextureFormat::BGRA8Unorm)
     , clothMesh_(nullptr)
-    , sphereVao_(0), sphereVbo_(0), sphereVertexCount_(0), selectedSphereIndex_(-1)
-    , shadowFBO_(0), shadowDepthTexture_(0), shadowMapSize_(1024)
+    , sphereVertexCount_(0), selectedSphereIndex_(-1)
+    , shadowMapSize_(1024)
+    , hasTexture_(false)
     , wireframeMode_(false)
-    , diffuseTexture_(0), hasTexture_(false)
 {
 }
 
@@ -67,142 +62,703 @@ Renderer::~Renderer() {
 }
 
 bool Renderer::init(const std::string& canvasId) {
-    EmscriptenWebGLContextAttributes attrs;
-    emscripten_webgl_init_context_attributes(&attrs);
-    attrs.majorVersion = 2;
-    attrs.minorVersion = 0;
-    attrs.alpha = false;
-    attrs.depth = true;
-    attrs.stencil = false;
-    attrs.antialias = true;
-    attrs.preserveDrawingBuffer = true; // Needed for screenshots
-    attrs.powerPreference = EM_WEBGL_POWER_PREFERENCE_HIGH_PERFORMANCE;
-
-    std::string selector = canvasId;
-    if (!selector.empty() && selector[0] != '#') {
-        selector = "#" + selector;
-    }
-
-    contextHandle_ = emscripten_webgl_create_context(selector.c_str(), &attrs);
-    if (contextHandle_ <= 0) {
-        emscripten_log(EM_LOG_ERROR, "Failed to create WebGL2 context on '%s'", selector.c_str());
+    instance_ = wgpu::CreateInstance(nullptr);
+    if (!instance_) {
+        emscripten_log(EM_LOG_ERROR, "Failed to create WebGPU instance");
         return false;
     }
 
-    EMSCRIPTEN_RESULT res = emscripten_webgl_make_context_current(contextHandle_);
-    if (res != EMSCRIPTEN_RESULT_SUCCESS) {
-        emscripten_log(EM_LOG_ERROR, "Failed to make WebGL2 context current");
-        return false;
-    }
+    // Request adapter
+    instance_.RequestAdapter(
+        nullptr, wgpu::CallbackMode::AllowSpontaneous,
+        [this, canvasId](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message) {
+            if (status != wgpu::RequestAdapterStatus::Success) {
+                emscripten_log(EM_LOG_ERROR, "Failed to get WebGPU adapter");
+                return;
+            }
+            adapter_ = adapter;
 
-    emscripten_log(EM_LOG_CONSOLE, "WebGL2 context created successfully");
+            wgpu::DeviceDescriptor deviceDesc{};
+            deviceDesc.SetUncapturedErrorCallback(
+                [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView msg) {
+                    emscripten_log(EM_LOG_ERROR, "WebGPU error (type=%d): %.*s",
+                                   (int)type, (int)msg.length, msg.data);
+                });
 
-    // Initialize OpenGL state
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glViewport(0, 0, width_, height_);
+            adapter_.RequestDevice(
+                &deviceDesc, wgpu::CallbackMode::AllowSpontaneous,
+                [this, canvasId](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+                    if (status != wgpu::RequestDeviceStatus::Success) {
+                        emscripten_log(EM_LOG_ERROR, "Failed to get WebGPU device");
+                        return;
+                    }
+                    device_ = device;
+                    queue_ = device_.GetQueue();
 
-    // Init shaders
-    if (!initShaders()) {
-        emscripten_log(EM_LOG_ERROR, "Failed to compile shaders");
-        return false;
-    }
+                    // Create surface
+                    std::string selector = canvasId;
+                    if (!selector.empty() && selector[0] != '#') {
+                        selector = "#" + selector;
+                    }
 
-    // Init grid
-    grid_.init();
+                    wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc{};
+                    canvasDesc.selector = selector.c_str();
+                    wgpu::SurfaceDescriptor surfDesc{};
+                    surfDesc.nextInChain = &canvasDesc;
+                    surface_ = instance_.CreateSurface(&surfDesc);
 
-    // Init sphere wireframe mesh
-    initSphereWireframe();
+                    wgpu::SurfaceCapabilities caps{};
+                    surface_.GetCapabilities(adapter_, &caps);
+                    surfaceFormat_ = caps.formats[0];
 
-    // Init shadow map
-    initShadowMap();
+                    wgpu::SurfaceConfiguration config{};
+                    config.device = device_;
+                    config.format = surfaceFormat_;
+                    config.usage = wgpu::TextureUsage::RenderAttachment;
+                    config.width = width_;
+                    config.height = height_;
+                    config.alphaMode = wgpu::CompositeAlphaMode::Auto;
+                    config.presentMode = wgpu::PresentMode::Fifo;
+                    surface_.Configure(&config);
 
-    initialized_ = true;
+                    // Create depth texture
+                    {
+                        wgpu::TextureDescriptor desc{};
+                        desc.size = {(uint32_t)width_, (uint32_t)height_, 1};
+                        desc.format = wgpu::TextureFormat::Depth24Plus;
+                        desc.usage = wgpu::TextureUsage::RenderAttachment;
+                        depthTexture_ = device_.CreateTexture(&desc);
+                        depthView_ = depthTexture_.CreateView();
+                    }
 
-    // Start render loop
-    setGlobalRenderer(this);
-    emscripten_request_animation_frame_loop(animFrameCallback, this);
+                    // Create dummy 1x1 white texture for when no diffuse is loaded
+                    createDummyTexture();
 
-    emscripten_log(EM_LOG_CONSOLE, "Renderer initialized");
-    return true;
+                    // Create shadow map resources
+                    createShadowResources();
+
+                    // Create pipelines
+                    createPipelines();
+
+                    // Init grid
+                    grid_.init(device_, surfaceFormat_);
+
+                    // Init sphere wireframe
+                    createSphereWireframe();
+
+                    initialized_ = true;
+
+                    // Start render loop
+                    setGlobalRenderer(this);
+                    emscripten_set_main_loop_arg(animFrameCallback, this, 0, false);
+
+                    emscripten_log(EM_LOG_CONSOLE, "WebGPU Renderer initialized (format=%d)", (int)surfaceFormat_);
+                });
+        });
+
+    return true; // async init
 }
 
-bool Renderer::initShaders() {
-    if (!pbrShader_.compile(ShaderSources::pbrVertexShader, ShaderSources::pbrFragmentShader)) {
-        return false;
+void Renderer::createDummyTexture() {
+    wgpu::TextureDescriptor desc{};
+    desc.size = {1, 1, 1};
+    desc.format = wgpu::TextureFormat::RGBA8Unorm;
+    desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    dummyTexture_ = device_.CreateTexture(&desc);
+    dummyTextureView_ = dummyTexture_.CreateView();
+
+    uint8_t white[] = {255, 255, 255, 255};
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = dummyTexture_;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = 4;
+    layout.rowsPerImage = 1;
+    wgpu::Extent3D extent = {1, 1, 1};
+    queue_.WriteTexture(&dst, white, 4, &layout, &extent);
+
+    // Diffuse sampler
+    {
+        wgpu::SamplerDescriptor desc{};
+        desc.minFilter = wgpu::FilterMode::Linear;
+        desc.magFilter = wgpu::FilterMode::Linear;
+        desc.mipmapFilter = wgpu::MipmapFilterMode::Linear;
+        desc.addressModeU = wgpu::AddressMode::Repeat;
+        desc.addressModeV = wgpu::AddressMode::Repeat;
+        diffuseSampler_ = device_.CreateSampler(&desc);
     }
-    if (!wireShader_.compile(ShaderSources::wireVertexShader, ShaderSources::wireFragmentShader)) {
-        return false;
-    }
-    if (!shadowShader_.compile(ShaderSources::shadowVertexShader, ShaderSources::shadowFragmentShader)) {
-        emscripten_log(EM_LOG_WARN, "Shadow shader compile failed, shadows disabled");
-    }
-    return true;
+
+    // Start with dummy
+    diffuseTexture_ = dummyTexture_;
+    diffuseTextureView_ = dummyTextureView_;
 }
 
-void Renderer::initShadowMap() {
-    glGenFramebuffers(1, &shadowFBO_);
-    glGenTextures(1, &shadowDepthTexture_);
+void Renderer::createShadowResources() {
+    // Shadow depth texture
+    {
+        wgpu::TextureDescriptor desc{};
+        desc.size = {(uint32_t)shadowMapSize_, (uint32_t)shadowMapSize_, 1};
+        desc.format = wgpu::TextureFormat::Depth32Float;
+        desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+        shadowTexture_ = device_.CreateTexture(&desc);
+        shadowTextureView_ = shadowTexture_.CreateView();
+    }
 
-    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, shadowMapSize_, shadowMapSize_,
-                 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowDepthTexture_, 0);
-
-    // No color attachment
-    GLenum drawBuffers = GL_NONE;
-    glDrawBuffers(1, &drawBuffers);
-    glReadBuffer(GL_NONE);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    // Shadow sampler (comparison)
+    {
+        wgpu::SamplerDescriptor desc{};
+        desc.compare = wgpu::CompareFunction::Less;
+        desc.minFilter = wgpu::FilterMode::Linear;
+        desc.magFilter = wgpu::FilterMode::Linear;
+        shadowSampler_ = device_.CreateSampler(&desc);
+    }
 }
 
-void Renderer::renderShadowPass() {
-    if (!shadowShader_.getProgram()) return;
+void Renderer::createPipelines() {
+    // Compile shaders
+    pbrShader_.compile(device_, ShaderSources::pbrShader);
+    shadowShader_.compile(device_, ShaderSources::shadowShader);
+    wireShader_.compile(device_, ShaderSources::wireShader);
 
-    // Light setup — directional from (5, 8, 5)
+    // Vertex layout for PBR (position + normal + texCoord)
+    wgpu::VertexAttribute pbrAttr0{};
+    pbrAttr0.format = wgpu::VertexFormat::Float32x3;
+    pbrAttr0.offset = offsetof(Vertex, position);
+    pbrAttr0.shaderLocation = 0;
+    wgpu::VertexAttribute pbrAttr1{};
+    pbrAttr1.format = wgpu::VertexFormat::Float32x3;
+    pbrAttr1.offset = offsetof(Vertex, normal);
+    pbrAttr1.shaderLocation = 1;
+    wgpu::VertexAttribute pbrAttr2{};
+    pbrAttr2.format = wgpu::VertexFormat::Float32x2;
+    pbrAttr2.offset = offsetof(Vertex, texCoord);
+    pbrAttr2.shaderLocation = 2;
+    std::array<wgpu::VertexAttribute, 3> pbrAttrs = {pbrAttr0, pbrAttr1, pbrAttr2};
+    wgpu::VertexBufferLayout pbrVBL{};
+    pbrVBL.arrayStride = sizeof(Vertex);
+    pbrVBL.attributeCount = pbrAttrs.size();
+    pbrVBL.attributes = pbrAttrs.data();
+
+    // PBR bind group layout
+    {
+        std::array<wgpu::BindGroupLayoutEntry, 5> entries{};
+        // 0: uniforms
+        entries[0].binding = 0;
+        entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+        entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
+        entries[0].buffer.minBindingSize = sizeof(PBRUniforms);
+        // 1: shadow sampler (comparison)
+        entries[1].binding = 1;
+        entries[1].visibility = wgpu::ShaderStage::Fragment;
+        entries[1].sampler.type = wgpu::SamplerBindingType::Comparison;
+        // 2: shadow texture
+        entries[2].binding = 2;
+        entries[2].visibility = wgpu::ShaderStage::Fragment;
+        entries[2].texture.sampleType = wgpu::TextureSampleType::Depth;
+        entries[2].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+        // 3: diffuse sampler
+        entries[3].binding = 3;
+        entries[3].visibility = wgpu::ShaderStage::Fragment;
+        entries[3].sampler.type = wgpu::SamplerBindingType::Filtering;
+        // 4: diffuse texture
+        entries[4].binding = 4;
+        entries[4].visibility = wgpu::ShaderStage::Fragment;
+        entries[4].texture.sampleType = wgpu::TextureSampleType::Float;
+        entries[4].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+
+        wgpu::BindGroupLayoutDescriptor desc{};
+        desc.entryCount = entries.size();
+        desc.entries = entries.data();
+        pbrBindGroupLayout_ = device_.CreateBindGroupLayout(&desc);
+    }
+
+    // PBR uniform buffer
+    {
+        wgpu::BufferDescriptor desc{};
+        desc.size = sizeof(PBRUniforms);
+        desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+        pbrUniformBuffer_ = device_.CreateBuffer(&desc);
+    }
+
+    rebuildPBRBindGroup();
+
+    // PBR pipeline (front face)
+    {
+        wgpu::PipelineLayoutDescriptor plDesc{};
+        plDesc.bindGroupLayoutCount = 1;
+        plDesc.bindGroupLayouts = &pbrBindGroupLayout_;
+        auto layout = device_.CreatePipelineLayout(&plDesc);
+
+        wgpu::ColorTargetState colorTarget{};
+        colorTarget.format = surfaceFormat_;
+
+        wgpu::FragmentState fragState{};
+        fragState.module = pbrShader_.getModule();
+        fragState.entryPoint = "fs_main";
+        fragState.targetCount = 1;
+        fragState.targets = &colorTarget;
+
+        wgpu::DepthStencilState depthStencil{};
+        depthStencil.format = wgpu::TextureFormat::Depth24Plus;
+        depthStencil.depthWriteEnabled = wgpu::OptionalBool::True;
+        depthStencil.depthCompare = wgpu::CompareFunction::Less;
+
+        wgpu::RenderPipelineDescriptor desc{};
+        desc.layout = layout;
+        desc.vertex.module = pbrShader_.getModule();
+        desc.vertex.entryPoint = "vs_main";
+        desc.vertex.bufferCount = 1;
+        desc.vertex.buffers = &pbrVBL;
+        desc.fragment = &fragState;
+        desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+        desc.primitive.cullMode = wgpu::CullMode::Back;
+        desc.depthStencil = &depthStencil;
+
+        pbrPipeline_ = device_.CreateRenderPipeline(&desc);
+
+        // Back face pipeline for cloth pass 1
+        desc.primitive.cullMode = wgpu::CullMode::Front;
+        // Add depth bias for back faces
+        depthStencil.depthBias = 1;
+        depthStencil.depthBiasSlopeScale = 1.0f;
+        desc.depthStencil = &depthStencil;
+        pbrBackfacePipeline_ = device_.CreateRenderPipeline(&desc);
+    }
+
+    // Shadow pipeline
+    {
+        // Shadow bind group layout
+        wgpu::BindGroupLayoutEntry entry{};
+        entry.binding = 0;
+        entry.visibility = wgpu::ShaderStage::Vertex;
+        entry.buffer.type = wgpu::BufferBindingType::Uniform;
+        entry.buffer.minBindingSize = sizeof(ShadowUniforms);
+
+        wgpu::BindGroupLayoutDescriptor bglDesc{};
+        bglDesc.entryCount = 1;
+        bglDesc.entries = &entry;
+        shadowBindGroupLayout_ = device_.CreateBindGroupLayout(&bglDesc);
+
+        // Shadow uniform buffer
+        wgpu::BufferDescriptor bufDesc{};
+        bufDesc.size = sizeof(ShadowUniforms);
+        bufDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+        shadowUniformBuffer_ = device_.CreateBuffer(&bufDesc);
+
+        wgpu::PipelineLayoutDescriptor plDesc{};
+        plDesc.bindGroupLayoutCount = 1;
+        plDesc.bindGroupLayouts = &shadowBindGroupLayout_;
+        auto layout = device_.CreatePipelineLayout(&plDesc);
+
+        // Position-only vertex layout
+        wgpu::VertexAttribute posAttr{};
+        posAttr.format = wgpu::VertexFormat::Float32x3;
+        posAttr.offset = 0;
+        posAttr.shaderLocation = 0;
+
+        wgpu::VertexBufferLayout shadowVBL{};
+        shadowVBL.arrayStride = sizeof(Vertex);
+        shadowVBL.attributeCount = 1;
+        shadowVBL.attributes = &posAttr;
+
+        wgpu::DepthStencilState depthStencil{};
+        depthStencil.format = wgpu::TextureFormat::Depth32Float;
+        depthStencil.depthWriteEnabled = wgpu::OptionalBool::True;
+        depthStencil.depthCompare = wgpu::CompareFunction::Less;
+
+        wgpu::RenderPipelineDescriptor desc{};
+        desc.layout = layout;
+        desc.vertex.module = shadowShader_.getModule();
+        desc.vertex.entryPoint = "vs_main";
+        desc.vertex.bufferCount = 1;
+        desc.vertex.buffers = &shadowVBL;
+        desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+        desc.primitive.cullMode = wgpu::CullMode::Back;
+        desc.depthStencil = &depthStencil;
+        // Depth-only pass: no color attachments, but fragment stage required for validation
+        desc.fragment = nullptr;
+
+        shadowPipeline_ = device_.CreateRenderPipeline(&desc);
+    }
+
+    // Wire pipeline
+    {
+        wgpu::BindGroupLayoutEntry entry{};
+        entry.binding = 0;
+        entry.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+        entry.buffer.type = wgpu::BufferBindingType::Uniform;
+        entry.buffer.minBindingSize = sizeof(WireUniforms);
+
+        wgpu::BindGroupLayoutDescriptor bglDesc{};
+        bglDesc.entryCount = 1;
+        bglDesc.entries = &entry;
+        wireBindGroupLayout_ = device_.CreateBindGroupLayout(&bglDesc);
+
+        wgpu::BufferDescriptor bufDesc{};
+        bufDesc.size = sizeof(WireUniforms);
+        bufDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+        wireUniformBuffer_ = device_.CreateBuffer(&bufDesc);
+
+        wgpu::PipelineLayoutDescriptor plDesc{};
+        plDesc.bindGroupLayoutCount = 1;
+        plDesc.bindGroupLayouts = &wireBindGroupLayout_;
+        auto layout = device_.CreatePipelineLayout(&plDesc);
+
+        wgpu::VertexAttribute posAttr{};
+        posAttr.format = wgpu::VertexFormat::Float32x3;
+        posAttr.offset = 0;
+        posAttr.shaderLocation = 0;
+
+        wgpu::VertexBufferLayout wireVBL{};
+        wireVBL.arrayStride = 3 * sizeof(float);
+        wireVBL.attributeCount = 1;
+        wireVBL.attributes = &posAttr;
+
+        wgpu::ColorTargetState colorTarget{};
+        colorTarget.format = surfaceFormat_;
+        wgpu::BlendState blend{};
+        blend.color.srcFactor = wgpu::BlendFactor::SrcAlpha;
+        blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+        blend.alpha.srcFactor = wgpu::BlendFactor::One;
+        blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+        colorTarget.blend = &blend;
+
+        wgpu::FragmentState fragState{};
+        fragState.module = wireShader_.getModule();
+        fragState.entryPoint = "fs_main";
+        fragState.targetCount = 1;
+        fragState.targets = &colorTarget;
+
+        wgpu::DepthStencilState depthStencil{};
+        depthStencil.format = wgpu::TextureFormat::Depth24Plus;
+        depthStencil.depthWriteEnabled = wgpu::OptionalBool::False;
+        depthStencil.depthCompare = wgpu::CompareFunction::Less;
+
+        wgpu::RenderPipelineDescriptor desc{};
+        desc.layout = layout;
+        desc.vertex.module = wireShader_.getModule();
+        desc.vertex.entryPoint = "vs_main";
+        desc.vertex.bufferCount = 1;
+        desc.vertex.buffers = &wireVBL;
+        desc.fragment = &fragState;
+        desc.primitive.topology = wgpu::PrimitiveTopology::LineList;
+        desc.depthStencil = &depthStencil;
+
+        wirePipeline_ = device_.CreateRenderPipeline(&desc);
+    }
+
+    // Wire bind group
+    {
+        wgpu::BindGroupEntry entry{};
+        entry.binding = 0;
+        entry.buffer = wireUniformBuffer_;
+        entry.size = sizeof(WireUniforms);
+
+        wgpu::BindGroupDescriptor desc{};
+        desc.layout = wireBindGroupLayout_;
+        desc.entryCount = 1;
+        desc.entries = &entry;
+        wireBindGroup_ = device_.CreateBindGroup(&desc);
+    }
+}
+
+void Renderer::rebuildPBRBindGroup() {
+    std::array<wgpu::BindGroupEntry, 5> entries{};
+    entries[0].binding = 0;
+    entries[0].buffer = pbrUniformBuffer_;
+    entries[0].size = sizeof(PBRUniforms);
+    entries[1].binding = 1;
+    entries[1].sampler = shadowSampler_;
+    entries[2].binding = 2;
+    entries[2].textureView = shadowTextureView_;
+    entries[3].binding = 3;
+    entries[3].sampler = diffuseSampler_;
+    entries[4].binding = 4;
+    entries[4].textureView = diffuseTextureView_;
+
+    wgpu::BindGroupDescriptor desc{};
+    desc.layout = pbrBindGroupLayout_;
+    desc.entryCount = entries.size();
+    desc.entries = entries.data();
+    pbrBindGroup_ = device_.CreateBindGroup(&desc);
+}
+
+void Renderer::createSphereWireframe() {
+    const int stacks = 12;
+    const int slices = 16;
+    const float PI = 3.14159265359f;
+    std::vector<float> vertices;
+
+    for (int i = 1; i < stacks; i++) {
+        float phi = PI * float(i) / float(stacks);
+        float y = std::cos(phi), r = std::sin(phi);
+        for (int j = 0; j < slices; j++) {
+            float t1 = 2.0f * PI * float(j) / float(slices);
+            float t2 = 2.0f * PI * float(j + 1) / float(slices);
+            vertices.push_back(r * std::cos(t1)); vertices.push_back(y); vertices.push_back(r * std::sin(t1));
+            vertices.push_back(r * std::cos(t2)); vertices.push_back(y); vertices.push_back(r * std::sin(t2));
+        }
+    }
+    for (int j = 0; j < slices; j++) {
+        float theta = 2.0f * PI * float(j) / float(slices);
+        for (int i = 0; i < stacks; i++) {
+            float p1 = PI * float(i) / float(stacks);
+            float p2 = PI * float(i + 1) / float(stacks);
+            vertices.push_back(std::sin(p1) * std::cos(theta)); vertices.push_back(std::cos(p1)); vertices.push_back(std::sin(p1) * std::sin(theta));
+            vertices.push_back(std::sin(p2) * std::cos(theta)); vertices.push_back(std::cos(p2)); vertices.push_back(std::sin(p2) * std::sin(theta));
+        }
+    }
+
+    sphereVertexCount_ = static_cast<int>(vertices.size() / 3);
+
+    wgpu::BufferDescriptor desc{};
+    desc.size = vertices.size() * sizeof(float);
+    desc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+    desc.mappedAtCreation = true;
+    sphereVbo_ = device_.CreateBuffer(&desc);
+    memcpy(sphereVbo_.GetMappedRange(), vertices.data(), desc.size);
+    sphereVbo_.Unmap();
+}
+
+void Renderer::stepAndRender(double time) {
+    if (!initialized_) return;
+
+    if (clothSim_.isInitialized() && clothSim_.isRunning()) {
+        clothSim_.step(time);
+        if (clothMesh_) {
+            const MeshData& meshData = clothSim_.generateMeshData();
+            clothMesh_->updateVertices(queue_, meshData.vertices);
+            clothMesh_->updateWireVertices(queue_, meshData.vertices, meshData.indices);
+        }
+    }
+
+    renderFrame();
+}
+
+void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
     glm::mat4 lightView = glm::lookAt(lightPos_, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     glm::mat4 lightProj = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 30.0f);
     lightSpaceMatrix_ = lightProj * lightView;
 
-    glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO_);
-    glViewport(0, 0, shadowMapSize_, shadowMapSize_);
-    glClear(GL_DEPTH_BUFFER_BIT);
+    wgpu::RenderPassDepthStencilAttachment depthAttach{};
+    depthAttach.view = shadowTextureView_;
+    depthAttach.depthClearValue = 1.0f;
+    depthAttach.depthLoadOp = wgpu::LoadOp::Clear;
+    depthAttach.depthStoreOp = wgpu::StoreOp::Store;
 
-    shadowShader_.use();
-    shadowShader_.setMat4("u_lightSpaceMatrix", lightSpaceMatrix_);
+    wgpu::RenderPassDescriptor rpDesc{};
+    rpDesc.depthStencilAttachment = &depthAttach;
 
-    // Render scene meshes to shadow map
-    const auto& meshes = scene_.getMeshes();
-    for (auto* mesh : meshes) {
+    auto pass = encoder.BeginRenderPass(&rpDesc);
+    pass.SetPipeline(shadowPipeline_);
+
+    // Shadow bind group
+    wgpu::BindGroupEntry entry{};
+    entry.binding = 0;
+    entry.buffer = shadowUniformBuffer_;
+    entry.size = sizeof(ShadowUniforms);
+
+    wgpu::BindGroupDescriptor bgDesc{};
+    bgDesc.layout = shadowBindGroupLayout_;
+    bgDesc.entryCount = 1;
+    bgDesc.entries = &entry;
+    auto shadowBindGroup = device_.CreateBindGroup(&bgDesc);
+
+    // Render scene meshes
+    for (auto* mesh : scene_.getMeshes()) {
         if (!mesh->isVisible()) continue;
-        shadowShader_.setMat4("u_model", mesh->getModelMatrix());
-        mesh->render();
+        ShadowUniforms su{};
+        su.model = mesh->getModelMatrix();
+        su.lightSpaceMatrix = lightSpaceMatrix_;
+        queue_.WriteBuffer(shadowUniformBuffer_, 0, &su, sizeof(su));
+        pass.SetBindGroup(0, shadowBindGroup);
+        pass.SetVertexBuffer(0, mesh->getVertexBuffer());
+        pass.SetIndexBuffer(mesh->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+        pass.DrawIndexed(mesh->getIndexCount());
     }
 
-    // Render cloth to shadow map
+    // Render cloth
     if (clothMesh_ && clothMesh_->isVisible()) {
-        shadowShader_.setMat4("u_model", glm::mat4(1.0f));
-        glDisable(GL_CULL_FACE);
-        clothMesh_->render();
-        glEnable(GL_CULL_FACE);
+        ShadowUniforms su{};
+        su.model = glm::mat4(1.0f);
+        su.lightSpaceMatrix = lightSpaceMatrix_;
+        queue_.WriteBuffer(shadowUniformBuffer_, 0, &su, sizeof(su));
+        pass.SetBindGroup(0, shadowBindGroup);
+        pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
+        pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+        pass.DrawIndexed(clothMesh_->getIndexCount());
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, width_, height_);
+    pass.End();
+}
+
+void Renderer::renderCollisionSpheres(wgpu::RenderPassEncoder& pass) {
+    if (collisionSpheres_.empty() || sphereVertexCount_ == 0) return;
+
+    pass.SetPipeline(wirePipeline_);
+    pass.SetVertexBuffer(0, sphereVbo_);
+
+    for (int i = 0; i < (int)collisionSpheres_.size(); i++) {
+        const auto& sphere = collisionSpheres_[i];
+        WireUniforms wu{};
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), sphere.center);
+        model = glm::scale(model, glm::vec3(sphere.radius));
+        wu.model = model;
+        wu.view = camera_.getViewMatrix();
+        float aspect = (height_ > 0) ? float(width_) / float(height_) : 1.0f;
+        wu.projection = camera_.getProjectionMatrix(aspect);
+        wu.color = (i == selectedSphereIndex_)
+            ? glm::vec4(1.0f, 0.9f, 0.2f, 0.8f)
+            : glm::vec4(0.3f, 0.8f, 1.0f, 0.5f);
+
+        queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+        pass.SetBindGroup(0, wireBindGroup_);
+        pass.Draw(sphereVertexCount_);
+    }
+}
+
+void Renderer::renderFrame() {
+    if (!initialized_) return;
+
+    wgpu::SurfaceTexture surfaceTexture;
+    surface_.GetCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
+        surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) return;
+
+    auto backbuffer = surfaceTexture.texture.CreateView();
+    auto encoder = device_.CreateCommandEncoder();
+
+    // Shadow pass
+    renderShadowPass(encoder);
+
+    // Main pass
+    wgpu::RenderPassColorAttachment colorAttach{};
+    colorAttach.view = backbuffer;
+    colorAttach.loadOp = wgpu::LoadOp::Clear;
+    colorAttach.storeOp = wgpu::StoreOp::Store;
+    colorAttach.clearValue = {0.11, 0.11, 0.18, 1.0};
+
+    wgpu::RenderPassDepthStencilAttachment depthAttach{};
+    depthAttach.view = depthView_;
+    depthAttach.depthClearValue = 1.0f;
+    depthAttach.depthLoadOp = wgpu::LoadOp::Clear;
+    depthAttach.depthStoreOp = wgpu::StoreOp::Store;
+
+    wgpu::RenderPassDescriptor rpDesc{};
+    rpDesc.colorAttachmentCount = 1;
+    rpDesc.colorAttachments = &colorAttach;
+    rpDesc.depthStencilAttachment = &depthAttach;
+
+    auto pass = encoder.BeginRenderPass(&rpDesc);
+
+    float aspect = (height_ > 0) ? float(width_) / float(height_) : 1.0f;
+    glm::mat4 view = camera_.getViewMatrix();
+    glm::mat4 proj = camera_.getProjectionMatrix(aspect);
+
+    // Grid
+    grid_.render(pass, queue_, view, proj);
+
+    // PBR uniforms helper
+    auto fillPBR = [&](const glm::mat4& model) {
+        PBRUniforms pu{};
+        pu.model = model;
+        pu.view = view;
+        pu.projection = proj;
+        pu.lightSpaceMatrix = lightSpaceMatrix_;
+        pu.camPos = camera_.getPosition();
+        pu.lightPos = lightPos_;
+        pu.lightColor = lightColor_ * lightIntensity_;
+        pu.baseColor = scene_.getMaterial().getBaseColor();
+        pu.metallic = scene_.getMaterial().getMetallic();
+        pu.roughness = scene_.getMaterial().getRoughness();
+        pu.ambientTop = ambientTop_;
+        pu.ambientBottom = ambientBottom_;
+        pu.shadowEnabled = 1.0f;
+        pu.uvOffset = uvOffset_;
+        pu.uvTiling = uvTiling_;
+        pu.hasTexture = hasTexture_ ? 1.0f : 0.0f;
+        queue_.WriteBuffer(pbrUniformBuffer_, 0, &pu, sizeof(pu));
+    };
+
+    // Scene meshes
+    for (auto* mesh : scene_.getMeshes()) {
+        if (!mesh->isVisible()) continue;
+        if (wireframeMode_ && mesh->getWireVertexCount() > 0) {
+            WireUniforms wu{};
+            wu.model = mesh->getModelMatrix();
+            wu.view = view;
+            wu.projection = proj;
+            wu.color = glm::vec4(0.0f, 1.0f, 0.5f, 1.0f);
+            queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+            pass.SetPipeline(wirePipeline_);
+            pass.SetBindGroup(0, wireBindGroup_);
+            pass.SetVertexBuffer(0, mesh->getWireVertexBuffer());
+            pass.Draw(mesh->getWireVertexCount());
+        } else {
+            fillPBR(mesh->getModelMatrix());
+            pass.SetPipeline(pbrPipeline_);
+            pass.SetBindGroup(0, pbrBindGroup_);
+            pass.SetVertexBuffer(0, mesh->getVertexBuffer());
+            pass.SetIndexBuffer(mesh->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            pass.DrawIndexed(mesh->getIndexCount());
+        }
+    }
+
+    // Cloth (two-pass or wireframe)
+    if (clothMesh_ && clothMesh_->isVisible()) {
+        if (wireframeMode_ && clothMesh_->getWireVertexCount() > 0) {
+            WireUniforms wu{};
+            wu.model = glm::mat4(1.0f);
+            wu.view = view;
+            wu.projection = proj;
+            wu.color = glm::vec4(0.0f, 0.8f, 1.0f, 1.0f);
+            queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+            pass.SetPipeline(wirePipeline_);
+            pass.SetBindGroup(0, wireBindGroup_);
+            pass.SetVertexBuffer(0, clothMesh_->getWireVertexBuffer());
+            pass.Draw(clothMesh_->getWireVertexCount());
+        } else {
+            fillPBR(glm::mat4(1.0f));
+
+            // Pass 1: back faces with depth bias
+            pass.SetPipeline(pbrBackfacePipeline_);
+            pass.SetBindGroup(0, pbrBindGroup_);
+            pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
+            pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            pass.DrawIndexed(clothMesh_->getIndexCount());
+
+            // Pass 2: front faces
+            pass.SetPipeline(pbrPipeline_);
+            pass.SetBindGroup(0, pbrBindGroup_);
+            pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
+            pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            pass.DrawIndexed(clothMesh_->getIndexCount());
+        }
+    }
+
+    // Collision spheres
+    renderCollisionSpheres(pass);
+
+    // Light sphere
+    if (sphereVertexCount_ > 0) {
+        WireUniforms wu{};
+        wu.model = glm::scale(glm::translate(glm::mat4(1.0f), lightPos_), glm::vec3(0.15f));
+        wu.view = view;
+        wu.projection = proj;
+        wu.color = glm::vec4(1.0f, 1.0f, 0.3f, 0.9f);
+        queue_.WriteBuffer(wireUniformBuffer_, 0, &wu, sizeof(wu));
+        pass.SetPipeline(wirePipeline_);
+        pass.SetBindGroup(0, wireBindGroup_);
+        pass.SetVertexBuffer(0, sphereVbo_);
+        pass.Draw(sphereVertexCount_);
+    }
+
+    pass.End();
+
+    auto commands = encoder.Finish();
+    queue_.Submit(1, &commands);
 }
 
 void Renderer::loadDiffuseTexture(const uint8_t* data, int size) {
-    // Decode image using stb_image
     int w, h, channels;
     unsigned char* pixels = stbi_load_from_memory(data, size, &w, &h, &channels, 4);
     if (!pixels) {
@@ -210,501 +766,148 @@ void Renderer::loadDiffuseTexture(const uint8_t* data, int size) {
         return;
     }
 
-    if (diffuseTexture_) glDeleteTextures(1, &diffuseTexture_);
+    wgpu::TextureDescriptor desc{};
+    desc.size = {(uint32_t)w, (uint32_t)h, 1};
+    desc.format = wgpu::TextureFormat::RGBA8Unorm;
+    desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    desc.mipLevelCount = 1;
+    diffuseTexture_ = device_.CreateTexture(&desc);
+    diffuseTextureView_ = diffuseTexture_.CreateView();
 
-    glGenTextures(1, &diffuseTexture_);
-    glBindTexture(GL_TEXTURE_2D, diffuseTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    wgpu::TexelCopyTextureInfo dst{};
+    dst.texture = diffuseTexture_;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = w * 4;
+    layout.rowsPerImage = h;
+    wgpu::Extent3D extent = {(uint32_t)w, (uint32_t)h, 1};
+    queue_.WriteTexture(&dst, pixels, w * h * 4, &layout, &extent);
 
     stbi_image_free(pixels);
     hasTexture_ = true;
+
+    rebuildPBRBindGroup();
     emscripten_log(EM_LOG_CONSOLE, "Texture loaded: %dx%d", w, h);
 }
 
 void Renderer::clearDiffuseTexture() {
-    if (diffuseTexture_) {
-        glDeleteTextures(1, &diffuseTexture_);
-        diffuseTexture_ = 0;
-    }
+    diffuseTexture_ = dummyTexture_;
+    diffuseTextureView_ = dummyTextureView_;
     hasTexture_ = false;
-}
-
-void Renderer::initSphereWireframe() {
-    // Generate unit sphere wireframe (latitude/longitude lines)
-    const int stacks = 12;
-    const int slices = 16;
-    const float PI = 3.14159265359f;
-
-    std::vector<float> vertices;
-
-    // Latitude lines (horizontal circles)
-    for (int i = 1; i < stacks; i++) {
-        float phi = PI * static_cast<float>(i) / static_cast<float>(stacks);
-        float y = std::cos(phi);
-        float r = std::sin(phi);
-
-        for (int j = 0; j < slices; j++) {
-            float theta1 = 2.0f * PI * static_cast<float>(j) / static_cast<float>(slices);
-            float theta2 = 2.0f * PI * static_cast<float>(j + 1) / static_cast<float>(slices);
-
-            vertices.push_back(r * std::cos(theta1));
-            vertices.push_back(y);
-            vertices.push_back(r * std::sin(theta1));
-
-            vertices.push_back(r * std::cos(theta2));
-            vertices.push_back(y);
-            vertices.push_back(r * std::sin(theta2));
-        }
-    }
-
-    // Longitude lines (vertical arcs)
-    for (int j = 0; j < slices; j++) {
-        float theta = 2.0f * PI * static_cast<float>(j) / static_cast<float>(slices);
-
-        for (int i = 0; i < stacks; i++) {
-            float phi1 = PI * static_cast<float>(i) / static_cast<float>(stacks);
-            float phi2 = PI * static_cast<float>(i + 1) / static_cast<float>(stacks);
-
-            vertices.push_back(std::sin(phi1) * std::cos(theta));
-            vertices.push_back(std::cos(phi1));
-            vertices.push_back(std::sin(phi1) * std::sin(theta));
-
-            vertices.push_back(std::sin(phi2) * std::cos(theta));
-            vertices.push_back(std::cos(phi2));
-            vertices.push_back(std::sin(phi2) * std::sin(theta));
-        }
-    }
-
-    sphereVertexCount_ = static_cast<int>(vertices.size() / 3);
-
-    glGenVertexArrays(1, &sphereVao_);
-    glGenBuffers(1, &sphereVbo_);
-
-    glBindVertexArray(sphereVao_);
-    glBindBuffer(GL_ARRAY_BUFFER, sphereVbo_);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-
-    glBindVertexArray(0);
-}
-
-void Renderer::renderCollisionSpheres(const glm::mat4& view, const glm::mat4& proj) {
-    if (collisionSpheres_.empty() || sphereVertexCount_ == 0) return;
-
-    wireShader_.use();
-    wireShader_.setMat4("u_view", view);
-    wireShader_.setMat4("u_projection", proj);
-    // Cyan with 50% alpha
-    GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
-    glUniform4f(colorLoc, 0.3f, 0.8f, 1.0f, 0.5f);
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_FALSE);
-
-    glBindVertexArray(sphereVao_);
-
-    for (int i = 0; i < static_cast<int>(collisionSpheres_.size()); i++) {
-        const auto& sphere = collisionSpheres_[i];
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), sphere.center);
-        model = glm::scale(model, glm::vec3(sphere.radius));
-        wireShader_.setMat4("u_model", model);
-
-        // Highlight selected sphere in yellow
-        if (i == selectedSphereIndex_) {
-            glUniform4f(colorLoc, 1.0f, 0.9f, 0.2f, 0.8f);
-        } else {
-            glUniform4f(colorLoc, 0.3f, 0.8f, 1.0f, 0.5f);
-        }
-
-        glDrawArrays(GL_LINES, 0, sphereVertexCount_);
-    }
-
-    glBindVertexArray(0);
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
-}
-
-void Renderer::syncCollidersToSim() {
-    clothSim_.clearColliders();
-
-    // Add manually placed collision spheres
-    for (const auto& sphere : collisionSpheres_) {
-        clothSim_.addCollider(sphere);
-    }
-
-    // Add bounding spheres from loaded meshes
-    const auto& meshDataCache = scene_.getMeshDataCache();
-    for (const auto& meshData : meshDataCache) {
-        if (meshData.vertices.empty()) continue;
-
-        glm::vec3 center(0.0f);
-        for (const auto& v : meshData.vertices) {
-            center += v.position;
-        }
-        center /= static_cast<float>(meshData.vertices.size());
-
-        float maxDist = 0.0f;
-        for (const auto& v : meshData.vertices) {
-            float dist = glm::length(v.position - center);
-            if (dist > maxDist) maxDist = dist;
-        }
-
-        clothSim_.addCollider(CollisionBody(center, maxDist + 0.05f));
-    }
-}
-
-void Renderer::stepAndRender(double time) {
-    if (!initialized_) return;
-
-    // Step cloth simulation
-    if (clothSim_.isInitialized() && clothSim_.isRunning()) {
-        clothSim_.step(time);
-
-        // Update cloth mesh VBO with new positions/normals
-        if (clothMesh_) {
-            const MeshData& meshData = clothSim_.generateMeshData();
-            clothMesh_->updateVertices(meshData.vertices);
-        }
-    }
-
-    renderFrame();
-}
-
-void Renderer::renderFrame() {
-    if (!initialized_) return;
-
-    // === Shadow Pass ===
-    renderShadowPass();
-
-    // === Main Pass ===
-    glClearColor(0.11f, 0.11f, 0.18f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    float aspect = (height_ > 0) ? static_cast<float>(width_) / static_cast<float>(height_) : 1.0f;
-    glm::mat4 view = camera_.getViewMatrix();
-    glm::mat4 proj = camera_.getProjectionMatrix(aspect);
-
-    // Grid
-    glDepthMask(GL_FALSE);
-    grid_.render(view, proj);
-    glDepthMask(GL_TRUE);
-
-    const auto& meshes = scene_.getMeshes();
-
-    // Helper to set up PBR uniforms (shared between scene meshes and cloth)
-    auto setupPBR = [&]() {
-        pbrShader_.use();
-        pbrShader_.setMat4("u_view", view);
-        pbrShader_.setMat4("u_projection", proj);
-
-        glm::vec3 camPos = camera_.getPosition();
-        pbrShader_.setVec3("u_camPos", camPos);
-        pbrShader_.setVec3("u_lightPos", lightPos_);
-        pbrShader_.setVec3("u_lightColor", lightColor_ * lightIntensity_);
-
-        // Shadow
-        pbrShader_.setMat4("u_lightSpaceMatrix", lightSpaceMatrix_);
-        bool shadowEnabled = (shadowDepthTexture_ != 0 && shadowShader_.getProgram() != 0);
-        pbrShader_.setInt("u_shadowEnabled", shadowEnabled ? 1 : 0);
-        if (shadowEnabled) {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
-            pbrShader_.setInt("u_shadowMap", 0);
-        }
-
-        // Texture
-        pbrShader_.setInt("u_hasTexture", hasTexture_ ? 1 : 0);
-        if (hasTexture_) {
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, diffuseTexture_);
-            pbrShader_.setInt("u_diffuseMap", 1);
-        }
-
-        // Hemisphere ambient
-        pbrShader_.setVec3("u_ambientTop", ambientTop_);
-        pbrShader_.setVec3("u_ambientBottom", ambientBottom_);
-
-        // UV parameters
-        pbrShader_.setFloat("u_uvOffsetU", uvOffset_.x);
-        pbrShader_.setFloat("u_uvOffsetV", uvOffset_.y);
-        pbrShader_.setFloat("u_uvTilingU", uvTiling_.x);
-        pbrShader_.setFloat("u_uvTilingV", uvTiling_.y);
-
-        scene_.getMaterial().apply(pbrShader_);
-    };
-
-    if (wireframeMode_) {
-        // PBR render first (normal)
-        if (!meshes.empty()) {
-            setupPBR();
-            for (auto* mesh : meshes) {
-                if (!mesh->isVisible()) continue;
-                pbrShader_.setMat4("u_model", mesh->getModelMatrix());
-                mesh->render();
-            }
-        }
-        if (clothMesh_ && clothMesh_->isVisible()) {
-            setupPBR();
-            pbrShader_.setMat4("u_model", glm::mat4(1.0f));
-            glDisable(GL_CULL_FACE);
-            clothMesh_->render();
-            glEnable(GL_CULL_FACE);
-        }
-
-        // Wireframe overlay: translucent green on top
-        wireShader_.use();
-        wireShader_.setMat4("u_view", view);
-        wireShader_.setMat4("u_projection", proj);
-        GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
-        glUniform4f(colorLoc, 0.3f, 1.0f, 0.3f, 0.12f);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(-1.0f, -1.0f);
-
-        for (auto* mesh : meshes) {
-            if (!mesh->isVisible()) continue;
-            wireShader_.setMat4("u_model", mesh->getModelMatrix());
-            mesh->render();
-        }
-        if (clothMesh_ && clothMesh_->isVisible()) {
-            wireShader_.setMat4("u_model", glm::mat4(1.0f));
-            glDisable(GL_CULL_FACE);
-            clothMesh_->render();
-            glEnable(GL_CULL_FACE);
-        }
-
-        glDisable(GL_POLYGON_OFFSET_FILL);
-        glDisable(GL_BLEND);
-    } else {
-        // PBR mode
-        if (!meshes.empty()) {
-            setupPBR();
-            for (auto* mesh : meshes) {
-                if (!mesh->isVisible()) continue;
-                pbrShader_.setMat4("u_model", mesh->getModelMatrix());
-                mesh->render();
-            }
-        }
-
-        // Cloth (two-pass rendering to prevent z-fighting on self-overlap)
-        // Pass 1: back faces with depth offset (pushed back)
-        // Pass 2: front faces on top (always wins depth test over back faces)
-        if (clothMesh_ && clothMesh_->isVisible()) {
-            setupPBR();
-            pbrShader_.setMat4("u_model", glm::mat4(1.0f));
-
-            // Pass 1: render back faces, pushed slightly into depth buffer
-            glEnable(GL_CULL_FACE);
-            glCullFace(GL_FRONT);  // cull front → draw back faces
-            glEnable(GL_POLYGON_OFFSET_FILL);
-            glPolygonOffset(1.0f, 1.0f);
-            clothMesh_->render();
-            glDisable(GL_POLYGON_OFFSET_FILL);
-
-            // Pass 2: render front faces at true depth
-            glCullFace(GL_BACK);   // cull back → draw front faces
-            clothMesh_->render();
-        }
-    }
-
-    // Collision sphere wireframes (always visible)
-    renderCollisionSpheres(view, proj);
-
-    // Light position visualization (yellow wireframe sphere)
-    if (sphereVertexCount_ > 0) {
-        wireShader_.use();
-        wireShader_.setMat4("u_view", view);
-        wireShader_.setMat4("u_projection", proj);
-        GLint colorLoc = glGetUniformLocation(wireShader_.getProgram(), "u_color");
-        glUniform4f(colorLoc, 1.0f, 1.0f, 0.3f, 0.9f);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        glm::mat4 lightModel = glm::translate(glm::mat4(1.0f), lightPos_);
-        lightModel = glm::scale(lightModel, glm::vec3(0.15f));
-        wireShader_.setMat4("u_model", lightModel);
-
-        glBindVertexArray(sphereVao_);
-        glDrawArrays(GL_LINES, 0, sphereVertexCount_);
-        glBindVertexArray(0);
-        glDisable(GL_BLEND);
-    }
+    rebuildPBRBindGroup();
 }
 
 void Renderer::addClothMesh(float width, float height, int resX, int resY) {
-    // Clean up existing cloth
-    if (clothMesh_) {
-        clothMesh_->cleanup();
-        delete clothMesh_;
-        clothMesh_ = nullptr;
-    }
-
-    // Initialize simulation
+    if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
     clothSim_.init(width, height, resX, resY);
-
-    // Sync all colliders (manual spheres + mesh bounding spheres)
     syncCollidersToSim();
-
-    // Create GPU mesh with dynamic VBO
-    const MeshData& initialMesh = clothSim_.generateMeshData();
+    const MeshData& initial = clothSim_.generateMeshData();
     clothMesh_ = new Mesh();
-    clothMesh_->initDynamic(initialMesh);
+    clothMesh_->initDynamic(device_, initial);
     clothMesh_->setName("cloth");
-
-    emscripten_log(EM_LOG_CONSOLE, "Cloth mesh created: %dx%d particles",
-                   resX, resY);
+    emscripten_log(EM_LOG_CONSOLE, "Cloth mesh created: %dx%d", resX, resY);
 }
 
-void Renderer::toggleSimulation(bool running) {
-    clothSim_.setRunning(running);
+void Renderer::addClothMeshHorizontal(float width, float depth, int resX, int resZ, float dropHeight) {
+    if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    clothSim_.initHorizontal(width, depth, resX, resZ, dropHeight);
+    syncCollidersToSim();
+    const MeshData& initial = clothSim_.generateMeshData();
+    clothMesh_ = new Mesh();
+    clothMesh_->initDynamic(device_, initial);
+    clothMesh_->setName("cloth");
+    emscripten_log(EM_LOG_CONSOLE, "Horizontal cloth: %dx%d at h=%.1f", resX, resZ, dropHeight);
 }
+
+void Renderer::toggleSimulation(bool running) { clothSim_.setRunning(running); }
 
 void Renderer::resetCloth() {
     clothSim_.reset();
-
-    // Update mesh to initial state
     if (clothMesh_) {
         const MeshData& meshData = clothSim_.generateMeshData();
-        clothMesh_->updateVertices(meshData.vertices);
+        clothMesh_->updateVertices(queue_, meshData.vertices);
     }
+}
+
+void Renderer::convertMeshToCloth(int meshIndex, int pinMode) {
+    const auto& cache = scene_.getMeshDataCache();
+    if (meshIndex < 0 || meshIndex >= (int)cache.size()) return;
+    if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    clothSim_.initFromMesh(cache[meshIndex], pinMode);
+    syncCollidersToSim();
+    const MeshData& initial = clothSim_.generateMeshData();
+    clothMesh_ = new Mesh();
+    clothMesh_->initDynamic(device_, initial);
+    clothMesh_->setName("cloth");
+    auto& meshes = scene_.getMeshes();
+    if (meshIndex < (int)meshes.size()) meshes[meshIndex]->setVisible(false);
+    emscripten_log(EM_LOG_CONSOLE, "Mesh %d → cloth (%zu verts, pin=%d)", meshIndex, cache[meshIndex].vertices.size(), pinMode);
 }
 
 void Renderer::addCollisionSphere(float x, float y, float z, float radius) {
     collisionSpheres_.emplace_back(glm::vec3(x, y, z), radius);
     syncCollidersToSim();
-    emscripten_log(EM_LOG_CONSOLE, "Collision sphere added at (%.2f, %.2f, %.2f) r=%.2f", x, y, z, radius);
 }
 
 void Renderer::removeCollisionSphere(int index) {
-    if (index < 0 || index >= static_cast<int>(collisionSpheres_.size())) return;
+    if (index < 0 || index >= (int)collisionSpheres_.size()) return;
     collisionSpheres_.erase(collisionSpheres_.begin() + index);
     syncCollidersToSim();
-    emscripten_log(EM_LOG_CONSOLE, "Collision sphere %d removed", index);
 }
 
-void Renderer::addClothMeshHorizontal(float width, float depth, int resX, int resZ, float dropHeight) {
-    if (clothMesh_) {
-        clothMesh_->cleanup();
-        delete clothMesh_;
-        clothMesh_ = nullptr;
+void Renderer::syncCollidersToSim() {
+    clothSim_.clearColliders();
+    for (const auto& s : collisionSpheres_) clothSim_.addCollider(s);
+    for (const auto& md : scene_.getMeshDataCache()) {
+        if (md.vertices.empty()) continue;
+        glm::vec3 center(0.0f);
+        for (const auto& v : md.vertices) center += v.position;
+        center /= float(md.vertices.size());
+        float maxDist = 0.0f;
+        for (const auto& v : md.vertices) {
+            float d = glm::length(v.position - center);
+            if (d > maxDist) maxDist = d;
+        }
+        clothSim_.addCollider(CollisionBody(center, maxDist + 0.05f));
     }
-
-    clothSim_.initHorizontal(width, depth, resX, resZ, dropHeight);
-    syncCollidersToSim();
-
-    const MeshData& initialMesh = clothSim_.generateMeshData();
-    clothMesh_ = new Mesh();
-    clothMesh_->initDynamic(initialMesh);
-    clothMesh_->setName("cloth");
-
-    emscripten_log(EM_LOG_CONSOLE, "Horizontal cloth mesh created: %dx%d at height %.1f",
-                   resX, resZ, dropHeight);
-}
-
-void Renderer::convertMeshToCloth(int meshIndex, int pinMode) {
-    const auto& cache = scene_.getMeshDataCache();
-    if (meshIndex < 0 || meshIndex >= static_cast<int>(cache.size())) return;
-
-    // Clean up existing cloth
-    if (clothMesh_) {
-        clothMesh_->cleanup();
-        delete clothMesh_;
-        clothMesh_ = nullptr;
-    }
-
-    // Initialize cloth simulation from mesh data
-    clothSim_.initFromMesh(cache[meshIndex], pinMode);
-    syncCollidersToSim();
-
-    // Create dynamic GPU mesh
-    const MeshData& initial = clothSim_.generateMeshData();
-    clothMesh_ = new Mesh();
-    clothMesh_->initDynamic(initial);
-    clothMesh_->setName("cloth");
-
-    // Hide original mesh
-    auto& meshes = scene_.getMeshes();
-    if (meshIndex < static_cast<int>(meshes.size())) {
-        meshes[meshIndex]->setVisible(false);
-    }
-
-    emscripten_log(EM_LOG_CONSOLE, "Mesh %d converted to cloth (%zu vertices, pinMode=%d)",
-                   meshIndex, cache[meshIndex].vertices.size(), pinMode);
 }
 
 int Renderer::pickSphere(float ox, float oy, float oz, float dx, float dy, float dz) const {
-    glm::vec3 origin(ox, oy, oz);
-    glm::vec3 dir(dx, dy, dz);
-
-    int closestIndex = -1;
-    float closestT = 1e30f;
-
-    for (int i = 0; i < static_cast<int>(collisionSpheres_.size()); i++) {
+    glm::vec3 origin(ox, oy, oz), dir(dx, dy, dz);
+    int closest = -1; float closestT = 1e30f;
+    for (int i = 0; i < (int)collisionSpheres_.size(); i++) {
         const auto& s = collisionSpheres_[i];
         glm::vec3 oc = origin - s.center;
-        float a = glm::dot(dir, dir);
-        float b = 2.0f * glm::dot(oc, dir);
+        float a = glm::dot(dir, dir), b = 2.0f * glm::dot(oc, dir);
         float c = glm::dot(oc, oc) - s.radius * s.radius;
-        float discriminant = b * b - 4.0f * a * c;
-
-        if (discriminant >= 0.0f) {
-            float t = (-b - std::sqrt(discriminant)) / (2.0f * a);
-            if (t < 0.0f) t = (-b + std::sqrt(discriminant)) / (2.0f * a);
-            if (t > 0.0f && t < closestT) {
-                closestT = t;
-                closestIndex = i;
-            }
+        float disc = b * b - 4.0f * a * c;
+        if (disc >= 0.0f) {
+            float t = (-b - std::sqrt(disc)) / (2.0f * a);
+            if (t < 0.0f) t = (-b + std::sqrt(disc)) / (2.0f * a);
+            if (t > 0.0f && t < closestT) { closestT = t; closest = i; }
         }
     }
-
-    return closestIndex;
+    return closest;
 }
 
 bool Renderer::pickCloth(float ox, float oy, float oz, float dx, float dy, float dz, float& t) const {
     if (!clothSim_.isInitialized()) return false;
-
     glm::vec3 aabbMin, aabbMax;
     clothSim_.getAABB(aabbMin, aabbMax);
-
-    // Expand AABB slightly for easier picking
-    glm::vec3 padding(0.1f);
-    aabbMin -= padding;
-    aabbMax += padding;
-
-    glm::vec3 origin(ox, oy, oz);
-    glm::vec3 dir(dx, dy, dz);
-    glm::vec3 invDir = 1.0f / dir;
-
-    float t1 = (aabbMin.x - origin.x) * invDir.x;
-    float t2 = (aabbMax.x - origin.x) * invDir.x;
-    float t3 = (aabbMin.y - origin.y) * invDir.y;
-    float t4 = (aabbMax.y - origin.y) * invDir.y;
-    float t5 = (aabbMin.z - origin.z) * invDir.z;
-    float t6 = (aabbMax.z - origin.z) * invDir.z;
-
+    glm::vec3 pad(0.1f);
+    aabbMin -= pad; aabbMax += pad;
+    glm::vec3 origin(ox, oy, oz), dir(dx, dy, dz), invDir = 1.0f / dir;
+    float t1 = (aabbMin.x - origin.x) * invDir.x, t2 = (aabbMax.x - origin.x) * invDir.x;
+    float t3 = (aabbMin.y - origin.y) * invDir.y, t4 = (aabbMax.y - origin.y) * invDir.y;
+    float t5 = (aabbMin.z - origin.z) * invDir.z, t6 = (aabbMax.z - origin.z) * invDir.z;
     float tmin = std::max(std::max(std::min(t1, t2), std::min(t3, t4)), std::min(t5, t6));
     float tmax = std::min(std::min(std::max(t1, t2), std::max(t3, t4)), std::max(t5, t6));
-
     if (tmax < 0.0f || tmin > tmax) return false;
-
     t = (tmin > 0.0f) ? tmin : tmax;
     return true;
 }
 
 void Renderer::setCollisionSpherePosition(int index, float x, float y, float z) {
-    if (index < 0 || index >= static_cast<int>(collisionSpheres_.size())) return;
+    if (index < 0 || index >= (int)collisionSpheres_.size()) return;
     collisionSpheres_[index].center = glm::vec3(x, y, z);
     syncCollidersToSim();
 }
@@ -713,92 +916,57 @@ void Renderer::translateCloth(float dx, float dy, float dz) {
     clothSim_.translateAll(dx, dy, dz);
     if (clothMesh_) {
         const MeshData& meshData = clothSim_.generateMeshData();
-        clothMesh_->updateVertices(meshData.vertices);
+        clothMesh_->updateVertices(queue_, meshData.vertices);
     }
 }
 
-float Renderer::getCollisionSphereX(int index) const {
-    if (index < 0 || index >= static_cast<int>(collisionSpheres_.size())) return 0.0f;
-    return collisionSpheres_[index].center.x;
-}
-
-float Renderer::getCollisionSphereY(int index) const {
-    if (index < 0 || index >= static_cast<int>(collisionSpheres_.size())) return 0.0f;
-    return collisionSpheres_[index].center.y;
-}
-
-float Renderer::getCollisionSphereZ(int index) const {
-    if (index < 0 || index >= static_cast<int>(collisionSpheres_.size())) return 0.0f;
-    return collisionSpheres_[index].center.z;
-}
+float Renderer::getCollisionSphereX(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.x : 0.0f; }
+float Renderer::getCollisionSphereY(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.y : 0.0f; }
+float Renderer::getCollisionSphereZ(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.z : 0.0f; }
 
 void Renderer::resize(int width, int height) {
-    width_ = width;
-    height_ = height;
-    if (initialized_) {
-        glViewport(0, 0, width_, height_);
-    }
+    width_ = width; height_ = height;
+    if (!initialized_) return;
+
+    // Recreate surface
+    wgpu::SurfaceConfiguration config{};
+    config.device = device_;
+    config.format = surfaceFormat_;
+    config.usage = wgpu::TextureUsage::RenderAttachment;
+    config.width = width_;
+    config.height = height_;
+    config.alphaMode = wgpu::CompositeAlphaMode::Auto;
+    config.presentMode = wgpu::PresentMode::Fifo;
+    surface_.Configure(&config);
+
+    // Recreate depth texture
+    wgpu::TextureDescriptor desc{};
+    desc.size = {(uint32_t)width_, (uint32_t)height_, 1};
+    desc.format = wgpu::TextureFormat::Depth24Plus;
+    desc.usage = wgpu::TextureUsage::RenderAttachment;
+    depthTexture_ = device_.CreateTexture(&desc);
+    depthView_ = depthTexture_.CreateView();
 }
 
 void Renderer::destroy() {
     if (!initialized_) return;
 
-    // Clean up cloth
-    if (clothMesh_) {
-        clothMesh_->cleanup();
-        delete clothMesh_;
-        clothMesh_ = nullptr;
-    }
-
-    // Clean up sphere wireframe
-    if (sphereVbo_) { glDeleteBuffers(1, &sphereVbo_); sphereVbo_ = 0; }
-    if (sphereVao_) { glDeleteVertexArrays(1, &sphereVao_); sphereVao_ = 0; }
-
+    if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
     collisionSpheres_.clear();
 
-    // Clean up shadow map
-    if (shadowDepthTexture_) { glDeleteTextures(1, &shadowDepthTexture_); shadowDepthTexture_ = 0; }
-    if (shadowFBO_) { glDeleteFramebuffers(1, &shadowFBO_); shadowFBO_ = 0; }
-
-    // Clean up diffuse texture
-    if (diffuseTexture_) { glDeleteTextures(1, &diffuseTexture_); diffuseTexture_ = 0; }
-    hasTexture_ = false;
-
-    scene_.clearScene();
     grid_.destroy();
     pbrShader_.destroy();
-    wireShader_.destroy();
     shadowShader_.destroy();
-
-    if (contextHandle_ > 0) {
-        emscripten_webgl_destroy_context(contextHandle_);
-        contextHandle_ = 0;
-    }
+    wireShader_.destroy();
+    scene_.clearScene();
 
     initialized_ = false;
-    if (g_renderer == this) {
-        g_renderer = nullptr;
-    }
+    if (g_renderer == this) g_renderer = nullptr;
 
     emscripten_log(EM_LOG_CONSOLE, "Renderer destroyed");
 }
 
 std::string Renderer::exportScreenshot() {
-    if (!initialized_) return "";
-
-    // Read pixels
-    std::vector<uint8_t> pixels(width_ * height_ * 4);
-    glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-    // Flip vertically (OpenGL reads bottom-up)
-    int rowSize = width_ * 4;
-    std::vector<uint8_t> flipped(pixels.size());
-    for (int y = 0; y < height_; y++) {
-        int srcRow = (height_ - 1 - y) * rowSize;
-        int dstRow = y * rowSize;
-        std::memcpy(flipped.data() + dstRow, pixels.data() + srcRow, rowSize);
-    }
-
-    std::string header = std::to_string(width_) + "," + std::to_string(height_) + ",";
-    return header + base64Encode(flipped);
+    // TODO: implement with WebGPU buffer readback
+    return "";
 }
