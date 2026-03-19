@@ -31,6 +31,10 @@ public:
     void setStiffness(float s) { stiffness_ = glm::clamp(s, 0.0f, 1.0f); }
     void setDamping(float d) { damping_ = glm::clamp(d, 0.0f, 0.1f); }
     void setFriction(float f) { friction_ = glm::clamp(f, 0.0f, 1.0f); }
+    void setSelfCollision(bool enabled) { selfCollisionEnabled_ = enabled; }
+    bool getSelfCollision() const { return selfCollisionEnabled_; }
+    void setClothThickness(float t) { clothThickness_ = glm::clamp(t, 0.005f, 0.2f); }
+    float getClothThickness() const { return clothThickness_; }
 
     const glm::vec3& getGravity() const { return gravity_; }
     const glm::vec3& getWindForce() const { return windForce_; }
@@ -57,6 +61,10 @@ private:
     void verletIntegrate(float dt);
     void solveConstraints();
     void handleCollisions();
+    void buildNeighborList();
+    void buildSpatialHash();
+    void handleSelfCollision();
+    bool isNeighbor(int i, int j) const;
     void recalculateNormals();
 
     // Grid dimensions
@@ -91,4 +99,17 @@ private:
     // State
     bool running_;
     bool initialized_;
+
+    // Self-collision
+    bool selfCollisionEnabled_ = false;
+    float clothThickness_ = 0.05f;
+
+    // Neighbor exclusion (built once at init)
+    std::vector<int> neighborList_;
+    std::vector<int> neighborOffset_;
+
+    // Spatial hash (rebuilt each frame)
+    std::vector<int32_t> hashCellStart_;
+    std::vector<int32_t> hashCellEntries_;
+    int32_t hashTableSize_ = 2048;
 };

@@ -29,6 +29,8 @@ export interface WasmModule {
   setClothStiffness(value: number): void;
   setClothDamping(value: number): void;
   setClothFriction(value: number): void;
+  setSelfCollision(enabled: boolean): void;
+  setClothThickness(thickness: number): void;
   isSimulationRunning(): boolean;
   convertMeshToCloth(meshIndex: number, pinMode: number): void;
   getLoadedMeshCount(): number;

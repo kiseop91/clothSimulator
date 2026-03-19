@@ -186,6 +186,14 @@ void setClothFriction(float f) {
     g_rendererInstance.setClothFriction(f);
 }
 
+void setSelfCollision(bool enabled) {
+    g_rendererInstance.setSelfCollision(enabled);
+}
+
+void setClothThickness(float t) {
+    g_rendererInstance.setClothThickness(t);
+}
+
 bool isSimulationRunning() {
     return g_rendererInstance.isSimulationRunning();
 }
@@ -391,6 +399,8 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("setClothStiffness", &setClothStiffness);
     emscripten::function("setClothDamping", &setClothDamping);
     emscripten::function("setClothFriction", &setClothFriction);
+    emscripten::function("setSelfCollision", &setSelfCollision);
+    emscripten::function("setClothThickness", &setClothThickness);
     emscripten::function("isSimulationRunning", &isSimulationRunning);
 
     // Horizontal cloth

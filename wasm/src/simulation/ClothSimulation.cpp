@@ -143,6 +143,7 @@ void ClothSimulation::init(float width, float height, int resX, int resY) {
     lastTime_ = -1.0;
     accumulator_ = 0.0;
     initialized_ = true;
+    buildNeighborList();
 }
 
 void ClothSimulation::initHorizontal(float width, float depth, int resX, int resZ, float dropHeight) {
@@ -249,6 +250,7 @@ void ClothSimulation::initHorizontal(float width, float depth, int resX, int res
     lastTime_ = -1.0;
     accumulator_ = 0.0;
     initialized_ = true;
+    buildNeighborList();
 }
 
 void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
@@ -329,6 +331,7 @@ void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
     lastTime_ = -1.0;
     accumulator_ = 0.0;
     initialized_ = true;
+    buildNeighborList();
 }
 
 void ClothSimulation::translateAll(float dx, float dy, float dz) {
@@ -378,6 +381,9 @@ void ClothSimulation::substep(float dt, double globalTime) {
     verletIntegrate(dt);
     solveConstraints();
     handleCollisions();
+    if (selfCollisionEnabled_) {
+        handleSelfCollision();
+    }
 }
 
 void ClothSimulation::applyForces(double globalTime) {
@@ -503,6 +509,147 @@ const MeshData& ClothSimulation::generateMeshData() {
     recalculateNormals();
 
     return cachedMeshData_;
+}
+
+void ClothSimulation::buildNeighborList() {
+    int n = static_cast<int>(particles_.size());
+    if (n == 0) return;
+
+    // Count neighbors per particle
+    std::vector<int> count(n, 0);
+    for (const auto& s : springs_) {
+        count[s.particleA]++;
+        count[s.particleB]++;
+    }
+
+    // Build offset array (prefix sum)
+    neighborOffset_.resize(n + 1);
+    neighborOffset_[0] = 0;
+    for (int i = 0; i < n; i++) {
+        neighborOffset_[i + 1] = neighborOffset_[i] + count[i];
+    }
+
+    // Fill neighbor list
+    neighborList_.resize(neighborOffset_[n]);
+    std::vector<int> writePos(n, 0);
+    for (const auto& s : springs_) {
+        int a = s.particleA;
+        int b = s.particleB;
+        neighborList_[neighborOffset_[a] + writePos[a]++] = b;
+        neighborList_[neighborOffset_[b] + writePos[b]++] = a;
+    }
+
+    // Sort each particle's neighbor sub-range for binary search
+    for (int i = 0; i < n; i++) {
+        std::sort(neighborList_.begin() + neighborOffset_[i],
+                  neighborList_.begin() + neighborOffset_[i + 1]);
+    }
+
+    // Size spatial hash table
+    hashTableSize_ = (n > 2000) ? 8192 : 2048;
+    hashCellStart_.resize(hashTableSize_ + 1);
+    hashCellEntries_.resize(n);
+}
+
+bool ClothSimulation::isNeighbor(int i, int j) const {
+    auto begin = neighborList_.begin() + neighborOffset_[i];
+    auto end = neighborList_.begin() + neighborOffset_[i + 1];
+    return std::binary_search(begin, end, j);
+}
+
+void ClothSimulation::buildSpatialHash() {
+    int n = static_cast<int>(particles_.size());
+    float cellSize = 2.0f * clothThickness_;
+    float invCell = 1.0f / cellSize;
+
+    // Clear counts
+    std::fill(hashCellStart_.begin(), hashCellStart_.end(), 0);
+
+    // Count particles per cell
+    for (int i = 0; i < n; i++) {
+        const glm::vec3& p = particles_[i].position;
+        int cx = static_cast<int>(std::floor(p.x * invCell));
+        int cy = static_cast<int>(std::floor(p.y * invCell));
+        int cz = static_cast<int>(std::floor(p.z * invCell));
+        int32_t h = ((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791)) & (hashTableSize_ - 1);
+        hashCellStart_[h]++;
+    }
+
+    // Prefix sum
+    int32_t sum = 0;
+    for (int32_t i = 0; i < hashTableSize_; i++) {
+        int32_t count = hashCellStart_[i];
+        hashCellStart_[i] = sum;
+        sum += count;
+    }
+    hashCellStart_[hashTableSize_] = sum;
+
+    // Scatter particle indices (use a copy of starts as write cursors)
+    std::vector<int32_t> cursor(hashCellStart_.begin(), hashCellStart_.begin() + hashTableSize_);
+    for (int i = 0; i < n; i++) {
+        const glm::vec3& p = particles_[i].position;
+        int cx = static_cast<int>(std::floor(p.x * invCell));
+        int cy = static_cast<int>(std::floor(p.y * invCell));
+        int cz = static_cast<int>(std::floor(p.z * invCell));
+        int32_t h = ((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791)) & (hashTableSize_ - 1);
+        hashCellEntries_[cursor[h]++] = i;
+    }
+}
+
+void ClothSimulation::handleSelfCollision() {
+    int n = static_cast<int>(particles_.size());
+    if (n == 0) return;
+
+    buildSpatialHash();
+
+    float cellSize = 2.0f * clothThickness_;
+    float invCell = 1.0f / cellSize;
+    float minDist = 2.0f * clothThickness_;
+    float minDist2 = minDist * minDist;
+
+    for (int i = 0; i < n; i++) {
+        if (particles_[i].pinned) continue;
+
+        const glm::vec3& pi = particles_[i].position;
+        int cx = static_cast<int>(std::floor(pi.x * invCell));
+        int cy = static_cast<int>(std::floor(pi.y * invCell));
+        int cz = static_cast<int>(std::floor(pi.z * invCell));
+
+        // Query 27 neighboring cells
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int32_t h = (((cx + dx) * 73856093) ^ ((cy + dy) * 19349663) ^ ((cz + dz) * 83492791)) & (hashTableSize_ - 1);
+
+                    for (int32_t k = hashCellStart_[h]; k < hashCellStart_[h + 1]; k++) {
+                        int j = hashCellEntries_[k];
+                        if (j <= i) continue;  // avoid duplicate pairs
+                        if (particles_[j].pinned) continue;
+                        if (isNeighbor(i, j)) continue;
+
+                        glm::vec3 diff = particles_[j].position - particles_[i].position;
+                        float dist2 = glm::dot(diff, diff);
+
+                        if (dist2 < minDist2 && dist2 > 1e-12f) {
+                            float dist = std::sqrt(dist2);
+                            glm::vec3 normal = diff / dist;
+                            float penetration = minDist - dist;
+
+                            float totalInvMass = particles_[i].invMass + particles_[j].invMass;
+                            if (totalInvMass < 1e-7f) continue;
+
+                            float wi = particles_[i].invMass / totalInvMass;
+                            float wj = particles_[j].invMass / totalInvMass;
+
+                            glm::vec3 correction = normal * penetration;
+                            particles_[i].position -= correction * wi;
+                            particles_[j].position += correction * wj;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 void ClothSimulation::recalculateNormals() {

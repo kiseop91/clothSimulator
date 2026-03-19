@@ -402,7 +402,7 @@ function LoadedMeshesSection({ bridge }: { bridge: ReturnType<typeof useRenderer
 // --- Simulation ---
 
 function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
-  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, selectCloth, translateCloth } = bridge;
+  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, setSelfCollision, setClothThickness, selectCloth, translateCloth } = bridge;
 
   const [clothWidth, setClothWidth] = useState(3.0);
   const [clothHeight, setClothHeight] = useState(3.0);
@@ -523,6 +523,22 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
               onChange={(e) => setClothFriction(parseFloat(e.target.value))}
               className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500" />
           </div>
+
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="selfCollision" checked={simulation.selfCollision}
+              onChange={(e) => setSelfCollision(e.target.checked)}
+              className="w-3.5 h-3.5 accent-purple-500 cursor-pointer" />
+            <label htmlFor="selfCollision" className="text-xs text-gray-400 cursor-pointer">Self-Collision</label>
+          </div>
+
+          {simulation.selfCollision && (
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Thickness ({simulation.clothThickness.toFixed(3)})</label>
+              <input type="range" min={0.01} max={0.2} step={0.005} value={simulation.clothThickness}
+                onChange={(e) => setClothThickness(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+            </div>
+          )}
         </div>
       )}
 

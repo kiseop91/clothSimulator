@@ -47,6 +47,8 @@ export interface SimulationState {
   stiffness: number;
   damping: number;
   friction: number;
+  selfCollision: boolean;
+  clothThickness: number;
   clothAdded: boolean;
   collisionSpheres: CollisionSphere[];
   selectedObjectType: 'none' | 'sphere' | 'cloth';
@@ -79,6 +81,8 @@ export interface RendererBridge {
   setClothStiffness: (value: number) => void;
   setClothDamping: (value: number) => void;
   setClothFriction: (value: number) => void;
+  setSelfCollision: (enabled: boolean) => void;
+  setClothThickness: (value: number) => void;
   selectCloth: () => void;
   convertMeshToCloth: (meshIndex: number, pinMode: number) => void;
   getLoadedMeshCount: () => number;
@@ -154,6 +158,8 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     stiffness: 0.9,
     damping: 0.01,
     friction: 0.5,
+    selfCollision: false,
+    clothThickness: 0.05,
     clothAdded: false,
     collisionSpheres: [],
     selectedObjectType: 'none',
@@ -285,6 +291,16 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
   const setClothFriction = useCallback((value: number) => {
     setSimulation((prev) => ({ ...prev, friction: value }));
     moduleRef.current?.setClothFriction(value);
+  }, []);
+
+  const setSelfCollision = useCallback((enabled: boolean) => {
+    setSimulation((prev) => ({ ...prev, selfCollision: enabled }));
+    moduleRef.current?.setSelfCollision(enabled);
+  }, []);
+
+  const setClothThickness = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, clothThickness: value }));
+    moduleRef.current?.setClothThickness(value);
   }, []);
 
   const selectCloth = useCallback(() => {
@@ -525,6 +541,8 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     setClothStiffness,
     setClothDamping,
     setClothFriction,
+    setSelfCollision,
+    setClothThickness,
     selectCloth,
     convertMeshToCloth,
     getLoadedMeshCount,

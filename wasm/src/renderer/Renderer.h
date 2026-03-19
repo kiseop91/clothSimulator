@@ -39,6 +39,8 @@ public:
     void setClothStiffness(float s) { clothSim_.setStiffness(s); }
     void setClothDamping(float d) { clothSim_.setDamping(d); }
     void setClothFriction(float f) { clothSim_.setFriction(f); }
+    void setSelfCollision(bool enabled) { clothSim_.setSelfCollision(enabled); }
+    void setClothThickness(float t) { clothSim_.setClothThickness(t); }
     void convertMeshToCloth(int meshIndex, int pinMode);
     bool isSimulationRunning() const { return clothSim_.isRunning(); }
     ClothSimulation& getClothSim() { return clothSim_; }
