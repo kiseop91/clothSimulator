@@ -42,6 +42,12 @@ export interface WasmModule {
   isSimulationRunning(): boolean;
   setUseGpuSolver(use: boolean): void;
   getUseGpuSolver(): boolean;
+  setSolverMode(mode: number): void;
+  getSolverMode(): number;
+  setConstraintIterations(n: number): void;
+  getConstraintIterations(): number;
+  setShowCollisionSpheres(show: boolean): void;
+  getShowCollisionSpheres(): boolean;
   convertMeshToCloth(meshIndex: number, pinMode: number): void;
   getLoadedMeshCount(): number;
   getLoadedMeshName(index: number): string;
@@ -84,6 +90,9 @@ export interface WasmModule {
   pickObject(ndcX: number, ndcY: number): number;
   setCollisionSpherePosition(index: number, x: number, y: number, z: number): void;
   translateCloth(dx: number, dy: number, dz: number): void;
+  grabClothParticle(ndcX: number, ndcY: number): number;
+  moveGrabbedParticle(ndcX: number, ndcY: number): void;
+  releaseClothParticle(): void;
   setSelectedSphere(index: number): void;
   getCollisionSphereX(index: number): number;
   getCollisionSphereY(index: number): number;

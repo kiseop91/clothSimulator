@@ -13,9 +13,47 @@ static glm::vec3 computeTriNormal(const glm::vec3& v0, const glm::vec3& v1, cons
     return (len > 1e-8f) ? (n / len) : glm::vec3(0.0f, 1.0f, 0.0f);
 }
 
+// Extract textures from glTF model into LoadResult
+static void extractTextures(const tinygltf::Model& model, LoadResult& result) {
+    for (const auto& image : model.images) {
+        TextureData tex;
+        tex.name = image.name.empty() ? image.uri : image.name;
+        tex.width = image.width;
+        tex.height = image.height;
+
+        if (image.component == 4) {
+            // Already RGBA
+            tex.pixels = image.image;
+        } else if (image.component == 3) {
+            // Convert RGB → RGBA
+            tex.pixels.resize(image.width * image.height * 4);
+            for (int i = 0; i < image.width * image.height; i++) {
+                tex.pixels[i * 4 + 0] = image.image[i * 3 + 0];
+                tex.pixels[i * 4 + 1] = image.image[i * 3 + 1];
+                tex.pixels[i * 4 + 2] = image.image[i * 3 + 2];
+                tex.pixels[i * 4 + 3] = 255;
+            }
+        } else {
+            continue; // unsupported channel count
+        }
+
+        if (!tex.pixels.empty()) {
+            result.textures.push_back(std::move(tex));
+        }
+    }
+}
+
+// Map glTF material texture index → LoadResult texture index
+static int resolveTextureIndex(const tinygltf::Model& model, int gltfTextureIndex) {
+    if (gltfTextureIndex < 0 || gltfTextureIndex >= (int)model.textures.size()) return -1;
+    int source = model.textures[gltfTextureIndex].source;
+    if (source < 0 || source >= (int)model.images.size()) return -1;
+    return source; // images are stored 1:1 in result.textures
+}
+
 static void processPrimitive(const tinygltf::Model& model,
                              const tinygltf::Primitive& prim,
-                             std::vector<MeshData>& result) {
+                             LoadResult& result) {
     MeshData meshData;
 
     // Get position accessor
@@ -42,6 +80,19 @@ static void processPrimitive(const tinygltf::Model& model,
         normStride = normView.byteStride ? normView.byteStride / sizeof(float) : 3;
     }
 
+    // Get texcoord accessor (optional)
+    const float* uvData = nullptr;
+    size_t uvStride = 2;
+    auto uvIt = prim.attributes.find("TEXCOORD_0");
+    if (uvIt != prim.attributes.end()) {
+        const tinygltf::Accessor& uvAccessor = model.accessors[uvIt->second];
+        const tinygltf::BufferView& uvView = model.bufferViews[uvAccessor.bufferView];
+        const tinygltf::Buffer& uvBuffer = model.buffers[uvView.buffer];
+        uvData = reinterpret_cast<const float*>(
+            uvBuffer.data.data() + uvView.byteOffset + uvAccessor.byteOffset);
+        uvStride = uvView.byteStride ? uvView.byteStride / sizeof(float) : 2;
+    }
+
     // Build vertices
     size_t vertexCount = posAccessor.count;
     meshData.vertices.resize(vertexCount);
@@ -59,6 +110,14 @@ static void processPrimitive(const tinygltf::Model& model,
             );
         } else {
             meshData.vertices[i].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+        if (uvData) {
+            meshData.vertices[i].texCoord = glm::vec2(
+                uvData[i * uvStride + 0],
+                uvData[i * uvStride + 1]
+            );
+        } else {
+            meshData.vertices[i].texCoord = glm::vec2(0.0f);
         }
     }
 
@@ -96,7 +155,6 @@ static void processPrimitive(const tinygltf::Model& model,
 
     // Generate normals if not provided
     if (!normData && meshData.indices.size() >= 3) {
-        // Compute per-face normals and accumulate
         for (size_t i = 0; i + 2 < meshData.indices.size(); i += 3) {
             uint32_t i0 = meshData.indices[i + 0];
             uint32_t i1 = meshData.indices[i + 1];
@@ -112,13 +170,36 @@ static void processPrimitive(const tinygltf::Model& model,
         }
     }
 
+    // Parse material
+    if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
+        const auto& mat = model.materials[prim.material];
+        meshData.material.name = mat.name;
+
+        const auto& pbr = mat.pbrMetallicRoughness;
+
+        if (pbr.baseColorFactor.size() >= 3) {
+            meshData.material.baseColor = glm::vec3(
+                static_cast<float>(pbr.baseColorFactor[0]),
+                static_cast<float>(pbr.baseColorFactor[1]),
+                static_cast<float>(pbr.baseColorFactor[2])
+            );
+        }
+        meshData.material.metallic = static_cast<float>(pbr.metallicFactor);
+        meshData.material.roughness = static_cast<float>(pbr.roughnessFactor);
+
+        // Diffuse texture
+        if (pbr.baseColorTexture.index >= 0) {
+            meshData.material.diffuseTextureIndex = resolveTextureIndex(model, pbr.baseColorTexture.index);
+        }
+    }
+
     if (!meshData.vertices.empty() && !meshData.indices.empty()) {
-        result.push_back(std::move(meshData));
+        result.meshes.push_back(std::move(meshData));
     }
 }
 
-std::vector<MeshData> GltfLoader::load(const uint8_t* data, size_t size, const std::string& ext) {
-    std::vector<MeshData> result;
+LoadResult GltfLoader::load(const uint8_t* data, size_t size, const std::string& ext) {
+    LoadResult result;
 
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
@@ -146,6 +227,28 @@ std::vector<MeshData> GltfLoader::load(const uint8_t* data, size_t size, const s
         return result;
     }
 
+    // Debug: log raw image info from tinygltf
+    emscripten_log(EM_LOG_CONSOLE, "glTF images: %zu, textures: %zu, materials: %zu",
+                   model.images.size(), model.textures.size(), model.materials.size());
+    for (size_t i = 0; i < model.images.size(); i++) {
+        const auto& img = model.images[i];
+        emscripten_log(EM_LOG_CONSOLE, "  image[%zu]: %dx%d, component=%d, bits=%d, pixel_type=%d, size=%zu, name='%s', uri='%s'",
+                       i, img.width, img.height, img.component, img.bits, img.pixel_type,
+                       img.image.size(), img.name.c_str(), img.uri.c_str());
+    }
+    for (size_t i = 0; i < model.materials.size(); i++) {
+        const auto& mat = model.materials[i];
+        const auto& pbr = mat.pbrMetallicRoughness;
+        emscripten_log(EM_LOG_CONSOLE, "  material[%zu]: name='%s', baseColorTex=%d, baseColor=(%.2f,%.2f,%.2f)",
+                       i, mat.name.c_str(), pbr.baseColorTexture.index,
+                       pbr.baseColorFactor.size() >= 3 ? pbr.baseColorFactor[0] : -1.0,
+                       pbr.baseColorFactor.size() >= 3 ? pbr.baseColorFactor[1] : -1.0,
+                       pbr.baseColorFactor.size() >= 3 ? pbr.baseColorFactor[2] : -1.0);
+    }
+
+    // Extract embedded textures first
+    extractTextures(model, result);
+
     // Process all meshes and their primitives
     for (const auto& mesh : model.meshes) {
         for (const auto& prim : mesh.primitives) {
@@ -155,6 +258,7 @@ std::vector<MeshData> GltfLoader::load(const uint8_t* data, size_t size, const s
         }
     }
 
-    emscripten_log(EM_LOG_CONSOLE, "glTF loaded: %zu mesh(es)", result.size());
+    emscripten_log(EM_LOG_CONSOLE, "glTF loaded: %zu mesh(es), %zu texture(s), %zu material(s)",
+                   result.meshes.size(), result.textures.size(), model.materials.size());
     return result;
 }

@@ -68,6 +68,6 @@ void Camera::pan(float dx, float dy) {
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
     glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-    float panSpeed = distance_ * 0.002f;
+    float panSpeed = distance_ * 0.25f;
     target_ += right * (-dx * panSpeed) + up * (dy * panSpeed);
 }

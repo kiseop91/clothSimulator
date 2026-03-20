@@ -42,7 +42,11 @@ echo Copied renderer.js + renderer.wasm to public\wasm\
 cd /d "%~dp0"
 
 echo.
+echo Killing any process on port 5173...
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":5173" ^| findstr "LISTENING"') do taskkill /PID %%p /F >nul 2>&1
+
+echo.
 echo ========================================
-echo  Starting Vite dev server...
+echo  Starting Vite dev server (HTTPS:5173)...
 echo ========================================
-call npx vite
+call npx vite --port 5173

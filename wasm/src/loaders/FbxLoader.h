@@ -1,10 +1,9 @@
 #pragma once
 
 #include "mesh/MeshData.h"
-#include <vector>
 #include <cstdint>
 
 class FbxLoader {
 public:
-    static std::vector<MeshData> load(const uint8_t* data, size_t size);
+    static LoadResult load(const uint8_t* data, size_t size);
 };

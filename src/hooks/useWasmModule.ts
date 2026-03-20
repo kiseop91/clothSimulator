@@ -41,6 +41,7 @@ export function useWasmModule(): UseWasmModuleResult {
           script.async = true;
 
           script.onload = () => {
+            script.remove(); // Clean up script element from DOM
             if (typeof window.createRenderer === "function") {
               window.createRenderer()
                 .then((mod: WasmModule) => resolve(mod))

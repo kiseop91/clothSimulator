@@ -58,6 +58,9 @@ export interface SimulationState {
   bendCompliance: number;
   numSubsteps: number;
   useGpuSolver: boolean;
+  solverMode: 'verlet' | 'xpbd';
+  constraintIterations: number;
+  showCollisionSpheres: boolean;
 }
 
 export interface RendererBridge {
@@ -93,6 +96,9 @@ export interface RendererBridge {
   setBendCompliance: (value: number) => void;
   setNumSubsteps: (value: number) => void;
   setUseGpuSolver: (use: boolean) => void;
+  setSolverMode: (mode: 'verlet' | 'xpbd') => void;
+  setConstraintIterations: (value: number) => void;
+  setShowCollisionSpheres: (show: boolean) => void;
   selectCloth: () => void;
   convertMeshToCloth: (meshIndex: number, pinMode: number) => void;
   getLoadedMeshCount: () => number;
@@ -179,6 +185,9 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     bendCompliance: 0.01,
     numSubsteps: 20,
     useGpuSolver: false,
+    solverMode: 'xpbd',
+    constraintIterations: 15,
+    showCollisionSpheres: true,
   });
 
   const moduleRef = useRef(module);
@@ -341,6 +350,27 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
   const setUseGpuSolver = useCallback((use: boolean) => {
     setSimulation((prev) => ({ ...prev, useGpuSolver: use }));
     moduleRef.current?.setUseGpuSolver(use);
+  }, []);
+
+  const setSolverMode = useCallback((mode: 'verlet' | 'xpbd') => {
+    const numMode = mode === 'verlet' ? 0 : 1;
+    moduleRef.current?.setSolverMode(numMode);
+    setSimulation((prev) => ({
+      ...prev,
+      solverMode: mode,
+      // Disable GPU solver when switching to Verlet
+      useGpuSolver: mode === 'verlet' ? false : prev.useGpuSolver,
+    }));
+  }, []);
+
+  const setConstraintIterations = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, constraintIterations: value }));
+    moduleRef.current?.setConstraintIterations(value);
+  }, []);
+
+  const setShowCollisionSpheres = useCallback((show: boolean) => {
+    setSimulation((prev) => ({ ...prev, showCollisionSpheres: show }));
+    moduleRef.current?.setShowCollisionSpheres(show);
   }, []);
 
   const selectCloth = useCallback(() => {
@@ -588,6 +618,9 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     setBendCompliance,
     setNumSubsteps,
     setUseGpuSolver,
+    setSolverMode,
+    setConstraintIterations,
+    setShowCollisionSpheres,
     selectCloth,
     convertMeshToCloth,
     getLoadedMeshCount,

@@ -54,8 +54,8 @@ bool loadModel(const emscripten::val& jsData, int size, const std::string& ext) 
     }
 
     // Load mesh data from file bytes
-    std::vector<MeshData> meshes = ModelLoader::load(buffer.data(), buffer.size(), ext);
-    if (meshes.empty()) {
+    LoadResult loadResult = ModelLoader::load(buffer.data(), buffer.size(), ext);
+    if (loadResult.meshes.empty()) {
         emscripten_log(EM_LOG_ERROR, "loadModel: no meshes loaded from %s data", ext.c_str());
         return false;
     }
@@ -63,21 +63,59 @@ bool loadModel(const emscripten::val& jsData, int size, const std::string& ext) 
     // Clear previous scene
     g_rendererInstance.getScene().clearScene();
 
+    // Upload embedded textures to GPU
+    std::vector<std::pair<wgpu::Texture, wgpu::TextureView>> gpuTextures;
+    for (const auto& texData : loadResult.textures) {
+        if (texData.pixels.empty() || texData.width <= 0 || texData.height <= 0) {
+            gpuTextures.push_back({nullptr, nullptr});
+            continue;
+        }
+        wgpu::TextureDescriptor desc{};
+        desc.dimension = wgpu::TextureDimension::e2D;
+        desc.size = {static_cast<uint32_t>(texData.width), static_cast<uint32_t>(texData.height), 1};
+        desc.format = wgpu::TextureFormat::RGBA8Unorm;
+        desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+        desc.mipLevelCount = 1;
+        wgpu::Texture tex = g_rendererInstance.getDevice().CreateTexture(&desc);
+        wgpu::TextureView view = tex.CreateView();
+
+        wgpu::TexelCopyTextureInfo dst{};
+        dst.texture = tex;
+        wgpu::TexelCopyBufferLayout layout{};
+        layout.bytesPerRow = texData.width * 4;
+        layout.rowsPerImage = texData.height;
+        wgpu::Extent3D extent = {static_cast<uint32_t>(texData.width), static_cast<uint32_t>(texData.height), 1};
+        g_rendererInstance.getQueue().WriteTexture(&dst, texData.pixels.data(),
+            texData.pixels.size(), &layout, &extent);
+
+        gpuTextures.push_back({tex, view});
+        emscripten_log(EM_LOG_CONSOLE, "Uploaded texture: %dx%d '%s'",
+                       texData.width, texData.height, texData.name.c_str());
+    }
+
     // Upload meshes to GPU and cache mesh data for collision
     int totalVerts = 0;
     int totalTris = 0;
-    for (auto& meshData : meshes) {
+    for (auto& meshData : loadResult.meshes) {
         Mesh* mesh = new Mesh();
         mesh->init(g_rendererInstance.getDevice(), meshData);
         mesh->setName("mesh_" + std::to_string(g_rendererInstance.getScene().getMeshes().size()));
+        mesh->setMaterial(meshData.material);
+
+        // Assign per-mesh diffuse texture if available
+        int texIdx = meshData.material.diffuseTextureIndex;
+        if (texIdx >= 0 && texIdx < (int)gpuTextures.size() && gpuTextures[texIdx].first) {
+            mesh->setDiffuseTexture(gpuTextures[texIdx].first, gpuTextures[texIdx].second);
+        }
+
         g_rendererInstance.getScene().addMesh(mesh);
         g_rendererInstance.getScene().addMeshData(meshData);
         totalVerts += static_cast<int>(meshData.vertices.size());
         totalTris += static_cast<int>(meshData.indices.size()) / 3;
     }
 
-    emscripten_log(EM_LOG_CONSOLE, "Model loaded: %zu mesh(es), %d vertices, %d triangles",
-                   meshes.size(), totalVerts, totalTris);
+    emscripten_log(EM_LOG_CONSOLE, "Model loaded: %zu mesh(es), %zu texture(s), %d vertices, %d triangles",
+                   loadResult.meshes.size(), loadResult.textures.size(), totalVerts, totalTris);
     return true;
 }
 
@@ -238,6 +276,30 @@ bool getUseGpuSolver() {
     return g_rendererInstance.getUseGpuSolver();
 }
 
+void setSolverMode(int mode) {
+    g_rendererInstance.setSolverMode(mode);
+}
+
+int getSolverMode() {
+    return g_rendererInstance.getSolverMode();
+}
+
+void setConstraintIterations(int n) {
+    g_rendererInstance.setConstraintIterations(n);
+}
+
+int getConstraintIterations() {
+    return g_rendererInstance.getConstraintIterations();
+}
+
+void setShowCollisionSpheres(bool show) {
+    g_rendererInstance.setShowCollisionSpheres(show);
+}
+
+bool getShowCollisionSpheres() {
+    return g_rendererInstance.getShowCollisionSpheres();
+}
+
 // Horizontal cloth (drop from above)
 void addClothMeshHorizontal(float w, float d, int rx, int rz, float h) {
     g_rendererInstance.addClothMeshHorizontal(w, d, rx, rz, h);
@@ -391,6 +453,16 @@ void translateCloth(float dx, float dy, float dz) {
     g_rendererInstance.translateCloth(dx, dy, dz);
 }
 
+int grabClothParticle(float ndcX, float ndcY) {
+    return g_rendererInstance.grabClothParticle(ndcX, ndcY);
+}
+void moveGrabbedParticle(float ndcX, float ndcY) {
+    g_rendererInstance.moveGrabbedParticle(ndcX, ndcY);
+}
+void releaseClothParticle() {
+    g_rendererInstance.releaseClothParticle();
+}
+
 void setSelectedSphere(int index) {
     g_rendererInstance.setSelectedSphere(index);
 }
@@ -460,6 +532,12 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("isSimulationRunning", &isSimulationRunning);
     emscripten::function("setUseGpuSolver", &setUseGpuSolver);
     emscripten::function("getUseGpuSolver", &getUseGpuSolver);
+    emscripten::function("setSolverMode", &setSolverMode);
+    emscripten::function("getSolverMode", &getSolverMode);
+    emscripten::function("setConstraintIterations", &setConstraintIterations);
+    emscripten::function("getConstraintIterations", &getConstraintIterations);
+    emscripten::function("setShowCollisionSpheres", &setShowCollisionSpheres);
+    emscripten::function("getShowCollisionSpheres", &getShowCollisionSpheres);
 
     // Horizontal cloth
     emscripten::function("addClothMeshHorizontal", &addClothMeshHorizontal);
@@ -507,6 +585,9 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("pickObject", &pickObject);
     emscripten::function("setCollisionSpherePosition", &setCollisionSpherePosition);
     emscripten::function("translateCloth", &translateCloth);
+    emscripten::function("grabClothParticle", &grabClothParticle);
+    emscripten::function("moveGrabbedParticle", &moveGrabbedParticle);
+    emscripten::function("releaseClothParticle", &releaseClothParticle);
     emscripten::function("setSelectedSphere", &setSelectedSphere);
     emscripten::function("getCollisionSphereX", &getCollisionSphereX);
     emscripten::function("getCollisionSphereY", &getCollisionSphereY);

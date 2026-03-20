@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <emscripten.h>
 
-std::vector<MeshData> ModelLoader::load(const uint8_t* data, size_t size, const std::string& ext) {
+LoadResult ModelLoader::load(const uint8_t* data, size_t size, const std::string& ext) {
     std::string lower = ext;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 

@@ -87,6 +87,10 @@ public:
     ClothSimulation& getClothSim() { return clothSim_; }
     void setUseGpuSolver(bool use);
     bool getUseGpuSolver() const { return useGpuSolver_; }
+    void setSolverMode(int mode);
+    int getSolverMode() const { return static_cast<int>(clothSim_.getSolverMode()); }
+    void setConstraintIterations(int n) { clothSim_.setConstraintIterations(n); }
+    int getConstraintIterations() const { return clothSim_.getConstraintIterations(); }
 
     // Collision spheres
     void addCollisionSphere(float x, float y, float z, float radius);
@@ -98,6 +102,11 @@ public:
     bool pickCloth(float ox, float oy, float oz, float dx, float dy, float dz, float& t) const;
     void setCollisionSpherePosition(int index, float x, float y, float z);
     void translateCloth(float dx, float dy, float dz);
+
+    // Cloth grab interaction
+    int grabClothParticle(float ndcX, float ndcY);
+    void moveGrabbedParticle(float ndcX, float ndcY);
+    void releaseClothParticle();
     void setSelectedSphere(int index) { selectedSphereIndex_ = index; }
     int getSelectedSphere() const { return selectedSphereIndex_; }
     float getCollisionSphereX(int index) const;
@@ -105,6 +114,9 @@ public:
     float getCollisionSphereZ(int index) const;
 
     // Rendering modes
+    void setShowCollisionSpheres(bool show) { showCollisionSpheres_ = show; }
+    bool getShowCollisionSpheres() const { return showCollisionSpheres_; }
+
     void setWireframeMode(bool enabled) {
         wireframeMode_ = enabled;
         emscripten_log(EM_LOG_CONSOLE, "[Wire Debug] setWireframeMode: %s", enabled ? "ON" : "OFF");
@@ -223,6 +235,7 @@ private:
     int selectedSphereIndex_;
     // Wireframe mode
     bool wireframeMode_;
+    bool showCollisionSpheres_ = true;
 
     // Separate uniform buffers + bind groups per wire draw
     static const int MAX_WIRE_DRAWS = 32;

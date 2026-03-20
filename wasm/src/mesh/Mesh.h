@@ -41,6 +41,18 @@ public:
 
     void cleanup();
 
+    // Per-mesh material
+    void setMaterial(const MaterialData& mat) { material_ = mat; }
+    const MaterialData& getMaterial() const { return material_; }
+    MaterialData& getMaterial() { return material_; }
+
+    // Per-mesh texture (GPU)
+    void setDiffuseTexture(wgpu::Texture tex, wgpu::TextureView view) {
+        diffuseTexture_ = tex; diffuseTextureView_ = view; hasDiffuseTexture_ = true;
+    }
+    wgpu::TextureView getDiffuseTextureView() const { return diffuseTextureView_; }
+    bool hasDiffuseTexture() const { return hasDiffuseTexture_; }
+
 private:
     void initInternal(wgpu::Device& device, const MeshData& data);
 
@@ -58,4 +70,10 @@ private:
     glm::vec3 position_ = glm::vec3(0.0f);
     glm::vec3 rotation_ = glm::vec3(0.0f);
     glm::vec3 scale_ = glm::vec3(1.0f);
+
+    // Per-mesh material & texture
+    MaterialData material_;
+    wgpu::Texture diffuseTexture_;
+    wgpu::TextureView diffuseTextureView_;
+    bool hasDiffuseTexture_ = false;
 };

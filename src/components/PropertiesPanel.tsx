@@ -473,7 +473,7 @@ function LoadedMeshesSection({ bridge }: { bridge: ReturnType<typeof useRenderer
 // --- Simulation ---
 
 function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
-  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, setSelfCollision, setClothThickness, setStretchCompliance, setShearCompliance, setBendCompliance, setNumSubsteps, setUseGpuSolver, selectCloth, translateCloth } = bridge;
+  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, setSelfCollision, setClothThickness, setStretchCompliance, setShearCompliance, setBendCompliance, setNumSubsteps, setUseGpuSolver, setSolverMode, setConstraintIterations, selectCloth, translateCloth } = bridge;
 
   const [clothWidth, setClothWidth] = useState(3.0);
   const [clothHeight, setClothHeight] = useState(3.0);
@@ -568,25 +568,40 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
         </div>
       )}
 
-      {/* GPU/CPU Toggle */}
+      {/* Solver Mode + GPU Toggle */}
       {simulation.clothAdded && (
-        <div className="flex items-center gap-2 bg-gray-700/50 px-3 py-2 rounded">
-          <label className="text-xs text-gray-400 flex-1">GPU Compute Solver</label>
-          <button
-            onClick={() => setUseGpuSolver(!simulation.useGpuSolver)}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
-              simulation.useGpuSolver ? "bg-green-500" : "bg-gray-600"
-            }`}
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+        <div className="space-y-2">
+          {/* Solver Mode Dropdown */}
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Solver Algorithm</label>
+            <select
+              value={simulation.solverMode}
+              onChange={(e) => setSolverMode(e.target.value as 'verlet' | 'xpbd')}
+              className="w-full bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
+            >
+              <option value="verlet">Verlet (Classic)</option>
+              <option value="xpbd">XPBD (Modern)</option>
+            </select>
+          </div>
+
+          {/* GPU Toggle — only available in XPBD mode */}
+          <div className={`flex items-center gap-2 px-3 py-2 rounded ${simulation.solverMode === 'xpbd' ? 'bg-gray-700/50' : 'bg-gray-700/20 opacity-50'}`}>
+            <label className="text-xs text-gray-400 flex-1">GPU Compute</label>
+            <button
+              onClick={() => simulation.solverMode === 'xpbd' && setUseGpuSolver(!simulation.useGpuSolver)}
+              disabled={simulation.solverMode !== 'xpbd'}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                simulation.solverMode !== 'xpbd' ? 'cursor-not-allowed' : 'cursor-pointer'
+              } ${simulation.useGpuSolver ? "bg-green-500" : "bg-gray-600"}`}
+            >
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
                 simulation.useGpuSolver ? "translate-x-4.5" : "translate-x-0.5"
-              }`}
-            />
-          </button>
-          <span className={`text-[10px] font-medium ${simulation.useGpuSolver ? "text-green-400" : "text-gray-500"}`}>
-            {simulation.useGpuSolver ? "GPU" : "CPU"}
-          </span>
+              }`} />
+            </button>
+            <span className={`text-[10px] font-medium ${simulation.useGpuSolver ? "text-green-400" : "text-gray-500"}`}>
+              {simulation.useGpuSolver ? "GPU" : "CPU"}
+            </span>
+          </div>
         </div>
       )}
 
@@ -595,13 +610,6 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
         <div className="space-y-2">
           <Vec3Group label="Gravity" values={simulation.gravity} step={0.1} onChange={(x, y, z) => setGravity(x, y, z)} />
           <Vec3Group label="Wind Force" values={simulation.wind} step={0.1} onChange={(x, y, z) => setWindForce(x, y, z)} />
-
-          <div>
-            <label className="text-xs text-gray-400 mb-1 block">Stiffness ({simulation.stiffness.toFixed(2)})</label>
-            <input type="range" min={0} max={1} step={0.01} value={simulation.stiffness}
-              onChange={(e) => setClothStiffness(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500" />
-          </div>
 
           <div>
             <label className="text-xs text-gray-400 mb-1 block">Damping ({simulation.damping.toFixed(3)})</label>
@@ -617,34 +625,55 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
               className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500" />
           </div>
 
-          {/* XPBD Parameters */}
-          <div className="border-t border-gray-700 pt-2 mt-1">
-            <label className="text-[10px] text-gray-500 block mb-1">XPBD Solver</label>
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Substeps ({simulation.numSubsteps})</label>
-              <input type="range" min={1} max={60} step={1} value={simulation.numSubsteps}
-                onChange={(e) => setNumSubsteps(parseInt(e.target.value))}
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+          {/* Verlet-specific Parameters */}
+          {simulation.solverMode === 'verlet' && (
+            <div className="border-t border-gray-700 pt-2 mt-1">
+              <label className="text-[10px] text-gray-500 block mb-1">Verlet Solver</label>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Stiffness ({simulation.stiffness.toFixed(2)})</label>
+                <input type="range" min={0} max={1} step={0.01} value={simulation.stiffness}
+                  onChange={(e) => setClothStiffness(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Constraint Iterations ({simulation.constraintIterations})</label>
+                <input type="range" min={1} max={50} step={1} value={simulation.constraintIterations}
+                  onChange={(e) => setConstraintIterations(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+              </div>
             </div>
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Stretch Compliance ({simulation.stretchCompliance.toFixed(4)})</label>
-              <input type="range" min={0} max={0.01} step={0.0001} value={simulation.stretchCompliance}
-                onChange={(e) => setStretchCompliance(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+          )}
+
+          {/* XPBD-specific Parameters */}
+          {simulation.solverMode === 'xpbd' && (
+            <div className="border-t border-gray-700 pt-2 mt-1">
+              <label className="text-[10px] text-gray-500 block mb-1">XPBD Solver</label>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Substeps ({simulation.numSubsteps})</label>
+                <input type="range" min={1} max={60} step={1} value={simulation.numSubsteps}
+                  onChange={(e) => setNumSubsteps(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Stretch Compliance ({simulation.stretchCompliance.toFixed(4)})</label>
+                <input type="range" min={0} max={0.01} step={0.0001} value={simulation.stretchCompliance}
+                  onChange={(e) => setStretchCompliance(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Shear Compliance ({simulation.shearCompliance.toFixed(4)})</label>
+                <input type="range" min={0} max={0.01} step={0.0001} value={simulation.shearCompliance}
+                  onChange={(e) => setShearCompliance(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Bend Compliance ({simulation.bendCompliance.toFixed(3)})</label>
+                <input type="range" min={0} max={1} step={0.001} value={simulation.bendCompliance}
+                  onChange={(e) => setBendCompliance(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+              </div>
             </div>
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Shear Compliance ({simulation.shearCompliance.toFixed(4)})</label>
-              <input type="range" min={0} max={0.01} step={0.0001} value={simulation.shearCompliance}
-                onChange={(e) => setShearCompliance(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
-            </div>
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Bend Compliance ({simulation.bendCompliance.toFixed(3)})</label>
-              <input type="range" min={0} max={1} step={0.001} value={simulation.bendCompliance}
-                onChange={(e) => setBendCompliance(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
-            </div>
-          </div>
+          )}
 
           <div className="flex items-center gap-2">
             <input type="checkbox" id="selfCollision" checked={simulation.selfCollision}
@@ -702,7 +731,7 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
 // --- Collision Spheres ---
 
 function CollisionSpheresSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
-  const { simulation, addCollisionSphere, removeCollisionSphere, selectSphere, deselectAll, setCollisionSpherePosition } = bridge;
+  const { simulation, addCollisionSphere, removeCollisionSphere, selectSphere, deselectAll, setCollisionSpherePosition, setShowCollisionSpheres } = bridge;
 
   const handleAddSphere = useCallback(() => {
     addCollisionSphere(0, 1.5, 0, 0.5);
@@ -712,13 +741,28 @@ function CollisionSpheresSection({ bridge }: { bridge: ReturnType<typeof useRend
 
   return (
     <div className="space-y-2">
-      <button
-        onClick={handleAddSphere}
-        className="w-full flex items-center justify-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors cursor-pointer"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        Add Sphere
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={handleAddSphere}
+          className="flex-1 flex items-center justify-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add Sphere
+        </button>
+        {simulation.collisionSpheres.length > 0 && (
+          <button
+            onClick={() => setShowCollisionSpheres(!simulation.showCollisionSpheres)}
+            className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
+              simulation.showCollisionSpheres
+                ? "bg-gray-600 hover:bg-gray-500 text-white"
+                : "bg-gray-700 hover:bg-gray-600 text-gray-400"
+            }`}
+            title={simulation.showCollisionSpheres ? "Hide Spheres" : "Show Spheres"}
+          >
+            {simulation.showCollisionSpheres ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+          </button>
+        )}
+      </div>
 
       {simulation.collisionSpheres.length > 0 && (
         <div className="space-y-1">

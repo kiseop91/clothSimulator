@@ -635,7 +635,7 @@ void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
 }
 
 void Renderer::renderCollisionSpheres(wgpu::RenderPassEncoder& pass) {
-    if (collisionSpheres_.empty() || sphereVertexCount_ == 0) return;
+    if (!showCollisionSpheres_ || collisionSpheres_.empty() || sphereVertexCount_ == 0) return;
 
     pass.SetPipeline(wirePipeline_);
     pass.SetVertexBuffer(0, sphereVbo_);
@@ -705,8 +705,8 @@ void Renderer::renderFrame() {
     // Grid
     grid_.render(pass, queue_, view, proj);
 
-    // PBR uniforms helper
-    auto fillPBR = [&](const glm::mat4& model) {
+    // PBR uniforms helper — uses per-mesh material if available
+    auto fillPBR = [&](const glm::mat4& model, const Mesh* meshPtr = nullptr) {
         PBRUniforms pu{};
         pu.model = model;
         pu.view = view;
@@ -715,15 +715,30 @@ void Renderer::renderFrame() {
         pu.camPos = camera_.getPosition();
         pu.lightPos = lightPos_;
         pu.lightColor = lightColor_ * lightIntensity_;
-        pu.baseColor = scene_.getMaterial().getBaseColor();
-        pu.metallic = scene_.getMaterial().getMetallic();
-        pu.roughness = scene_.getMaterial().getRoughness();
+        if (meshPtr && meshPtr->hasDiffuseTexture()) {
+            // Per-mesh material
+            pu.baseColor = meshPtr->getMaterial().baseColor;
+            pu.metallic = meshPtr->getMaterial().metallic;
+            pu.roughness = meshPtr->getMaterial().roughness;
+            pu.hasTexture = 1.0f;
+        } else if (meshPtr) {
+            // Per-mesh material, no texture
+            pu.baseColor = meshPtr->getMaterial().baseColor;
+            pu.metallic = meshPtr->getMaterial().metallic;
+            pu.roughness = meshPtr->getMaterial().roughness;
+            pu.hasTexture = hasTexture_ ? 1.0f : 0.0f;
+        } else {
+            // Scene-level material (cloth, etc.)
+            pu.baseColor = scene_.getMaterial().getBaseColor();
+            pu.metallic = scene_.getMaterial().getMetallic();
+            pu.roughness = scene_.getMaterial().getRoughness();
+            pu.hasTexture = hasTexture_ ? 1.0f : 0.0f;
+        }
         pu.ambientTop = ambientTop_;
         pu.ambientBottom = ambientBottom_;
         pu.shadowEnabled = 1.0f;
         pu.uvOffset = uvOffset_;
         pu.uvTiling = uvTiling_;
-        pu.hasTexture = hasTexture_ ? 1.0f : 0.0f;
         queue_.WriteBuffer(pbrUniformBuffer_, 0, &pu, sizeof(pu));
     };
 
@@ -764,9 +779,34 @@ void Renderer::renderFrame() {
             diag_.drawCallsPerFrame++;
             pass.Draw(mesh->getWireVertexCount());
         } else {
-            fillPBR(mesh->getModelMatrix());
+            fillPBR(mesh->getModelMatrix(), mesh);
+
+            // Use per-mesh texture bind group if available
+            wgpu::BindGroup bg = pbrBindGroup_;
+            if (mesh->hasDiffuseTexture()) {
+                // Build temporary bind group with per-mesh texture
+                wgpu::BindGroupEntry entries[5] = {};
+                entries[0].binding = 0;
+                entries[0].buffer = pbrUniformBuffer_;
+                entries[0].size = sizeof(PBRUniforms);
+                entries[1].binding = 1;
+                entries[1].sampler = shadowSampler_;
+                entries[2].binding = 2;
+                entries[2].textureView = shadowTextureView_;
+                entries[3].binding = 3;
+                entries[3].sampler = diffuseSampler_;
+                entries[4].binding = 4;
+                entries[4].textureView = mesh->getDiffuseTextureView();
+
+                wgpu::BindGroupDescriptor desc{};
+                desc.layout = pbrBindGroupLayout_;
+                desc.entryCount = 5;
+                desc.entries = entries;
+                bg = device_.CreateBindGroup(&desc);
+            }
+
             pass.SetPipeline(pbrPipeline_);
-            pass.SetBindGroup(0, pbrBindGroup_);
+            pass.SetBindGroup(0, bg);
             pass.SetVertexBuffer(0, mesh->getVertexBuffer());
             pass.SetIndexBuffer(mesh->getIndexBuffer(), wgpu::IndexFormat::Uint32);
             diag_.drawCallsPerFrame++;
@@ -796,7 +836,7 @@ void Renderer::renderFrame() {
             diag_.drawCallsPerFrame++;
             pass.Draw(clothMesh_->getWireVertexCount());
         } else {
-            fillPBR(glm::mat4(1.0f));
+            fillPBR(glm::mat4(1.0f), nullptr);
 
             // Pass 1: back faces with depth bias
             pass.SetPipeline(pbrBackfacePipeline_);
@@ -849,6 +889,8 @@ void Renderer::loadDiffuseTexture(const uint8_t* data, int size) {
         return;
     }
 
+    // Previous texture is released automatically by RAII when overwritten below
+
     wgpu::TextureDescriptor desc{};
     desc.size = {(uint32_t)w, (uint32_t)h, 1};
     desc.format = wgpu::TextureFormat::RGBA8Unorm;
@@ -881,6 +923,13 @@ void Renderer::clearDiffuseTexture() {
 
 void Renderer::setUseGpuSolver(bool use) {
     if (use == useGpuSolver_) return;
+
+    // GPU solver only works with XPBD mode
+    if (use && clothSim_.getSolverMode() != SolverMode::XPBD) {
+        emscripten_log(EM_LOG_WARN, "GPU Solver requires XPBD mode");
+        return;
+    }
+
     useGpuSolver_ = use;
 
     if (use && clothSim_.isInitialized()) {
@@ -891,6 +940,22 @@ void Renderer::setUseGpuSolver(bool use) {
         }
     }
     emscripten_log(EM_LOG_CONSOLE, "GPU Solver: %s", use ? "ON" : "OFF");
+}
+
+void Renderer::setSolverMode(int mode) {
+    SolverMode sm = (mode == 0) ? SolverMode::VERLET : SolverMode::XPBD;
+
+    if (sm == SolverMode::VERLET && useGpuSolver_) {
+        useGpuSolver_ = false;
+        emscripten_log(EM_LOG_CONSOLE, "GPU Solver disabled (Verlet mode)");
+    }
+
+    clothSim_.setSolverMode(sm);
+
+    if (sm == SolverMode::XPBD && clothSim_.isInitialized()) {
+        gpuSolver_.destroy();
+        gpuSolver_.init(device_, queue_, clothSim_);
+    }
 }
 
 void Renderer::addClothMesh(float width, float height, int resX, int resY) {
@@ -1024,6 +1089,65 @@ void Renderer::translateCloth(float dx, float dy, float dz) {
     }
 }
 
+// ─── Cloth Grab Interaction ──────────────────────────────────────────────
+
+int Renderer::grabClothParticle(float ndcX, float ndcY) {
+    if (!clothSim_.isInitialized()) return -1;
+    float aspect = (height_ > 0) ? static_cast<float>(width_) / static_cast<float>(height_) : 1.0f;
+    glm::vec3 origin, dir;
+    camera_.screenToRay(ndcX, ndcY, aspect, origin, dir);
+
+    int index = clothSim_.findNearestParticleToRay(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z);
+    if (index >= 0) {
+        clothSim_.grabParticle(index);
+        if (useGpuSolver_ && gpuSolver_.isInitialized()) {
+            gpuSolver_.uploadSingleParticle(queue_, clothSim_, index);
+        }
+    }
+    return index;
+}
+
+void Renderer::moveGrabbedParticle(float ndcX, float ndcY) {
+    int index = clothSim_.getGrabbedParticle();
+    if (index < 0) return;
+
+    float aspect = (height_ > 0) ? static_cast<float>(width_) / static_cast<float>(height_) : 1.0f;
+
+    // Get camera forward vector and particle's current depth
+    glm::vec3 camPos = camera_.getPosition();
+    glm::mat4 view = camera_.getViewMatrix();
+    const auto& particles = clothSim_.getParticles();
+    glm::vec3 particlePos = particles[index].position;
+
+    // Compute depth along view forward
+    glm::vec3 viewForward = -glm::vec3(view[0][2], view[1][2], view[2][2]);
+    float depth = glm::dot(particlePos - camPos, viewForward);
+
+    // Generate ray from new NDC
+    glm::vec3 origin, dir;
+    camera_.screenToRay(ndcX, ndcY, aspect, origin, dir);
+
+    // Find point on ray at same depth
+    float denom = glm::dot(dir, viewForward);
+    if (std::abs(denom) < 1e-6f) return;
+    float t = depth / denom;
+    glm::vec3 newPos = origin + t * dir;
+
+    clothSim_.moveParticle(index, newPos.x, newPos.y, newPos.z);
+
+    if (useGpuSolver_ && gpuSolver_.isInitialized()) {
+        gpuSolver_.uploadSingleParticle(queue_, clothSim_, index);
+    }
+}
+
+void Renderer::releaseClothParticle() {
+    int index = clothSim_.getGrabbedParticle();
+    clothSim_.releaseParticle();
+    if (index >= 0 && useGpuSolver_ && gpuSolver_.isInitialized()) {
+        gpuSolver_.uploadSingleParticle(queue_, clothSim_, index);
+    }
+}
+
 float Renderer::getCollisionSphereX(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.x : 0.0f; }
 float Renderer::getCollisionSphereY(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.y : 0.0f; }
 float Renderer::getCollisionSphereZ(int index) const { return (index >= 0 && index < (int)collisionSpheres_.size()) ? collisionSpheres_[index].center.z : 0.0f; }
@@ -1058,6 +1182,11 @@ void Renderer::resize(int width, int height) {
 
 void Renderer::destroy() {
     if (!initialized_) return;
+
+    // Mark as not initialized FIRST to prevent in-flight render callbacks
+    // from using resources during cleanup (stepAndRender checks this flag)
+    initialized_ = false;
+
     emscripten_cancel_main_loop();
 
     gpuSolver_.destroy();
@@ -1070,7 +1199,11 @@ void Renderer::destroy() {
     wireShader_.destroy();
     scene_.clearScene();
 
-    initialized_ = false;
+    // WebGPU objects are released automatically by RAII (C++ wgpu::* destructors)
+    // when the Renderer object is destroyed or re-initialized.
+    // Do NOT explicitly set them to nullptr here — doing so can cause
+    // GPU driver crashes if commands referencing them are still in-flight.
+
     if (g_renderer == this) g_renderer = nullptr;
 
     emscripten_log(EM_LOG_CONSOLE, "Renderer destroyed");

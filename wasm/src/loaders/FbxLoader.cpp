@@ -15,8 +15,8 @@ static glm::vec3 computeNormal(const glm::vec3& v0, const glm::vec3& v1, const g
     return (len > 1e-8f) ? (n / len) : glm::vec3(0.0f, 1.0f, 0.0f);
 }
 
-std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
-    std::vector<MeshData> result;
+LoadResult FbxLoader::load(const uint8_t* data, size_t size) {
+    LoadResult result;
 
     ofbx::LoadFlags flags = ofbx::LoadFlags::NONE;
 
@@ -33,8 +33,19 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
 
         ofbx::Vec3Attributes positions = geomData.getPositions();
         ofbx::Vec3Attributes normals = geomData.getNormals();
+        ofbx::Vec2Attributes uvs = geomData.getUVs();
 
         if (positions.count == 0) continue;
+
+        // Extract material from FBX mesh
+        MaterialData fbxMaterial;
+        if (fbxMesh->getMaterialCount() > 0) {
+            const ofbx::Material* mat = fbxMesh->getMaterial(0);
+            if (mat) {
+                ofbx::Color diffuse = mat->getDiffuseColor();
+                fbxMaterial.baseColor = glm::vec3(diffuse.r, diffuse.g, diffuse.b);
+            }
+        }
 
         // Use partitions for triangulation
         int partCount = geomData.getPartitionCount();
@@ -42,6 +53,7 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
         for (int pi = 0; pi < partCount; pi++) {
             ofbx::GeometryPartition partition = geomData.getPartition(pi);
             MeshData meshData;
+            meshData.material = fbxMaterial;
 
             for (int poly = 0; poly < partition.polygon_count; poly++) {
                 const ofbx::GeometryPartition::Polygon& p = partition.polygons[poly];
@@ -68,6 +80,15 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
                         v2.normal = n;
                     }
 
+                    if (uvs.count > 0) {
+                        ofbx::Vec2 uv0 = uvs.get(idx0);
+                        ofbx::Vec2 uv1 = uvs.get(idx1);
+                        ofbx::Vec2 uv2 = uvs.get(idx2);
+                        v0.texCoord = glm::vec2(static_cast<float>(uv0.x), static_cast<float>(uv0.y));
+                        v1.texCoord = glm::vec2(static_cast<float>(uv1.x), static_cast<float>(uv1.y));
+                        v2.texCoord = glm::vec2(static_cast<float>(uv2.x), static_cast<float>(uv2.y));
+                    }
+
                     uint32_t base = static_cast<uint32_t>(meshData.vertices.size());
                     meshData.vertices.push_back(v0);
                     meshData.vertices.push_back(v1);
@@ -79,13 +100,14 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
             }
 
             if (!meshData.vertices.empty()) {
-                result.push_back(std::move(meshData));
+                result.meshes.push_back(std::move(meshData));
             }
         }
 
         // If no partitions, try direct vertex access
         if (partCount == 0 && positions.count > 0) {
             MeshData meshData;
+            meshData.material = fbxMaterial;
             meshData.vertices.resize(positions.count);
             for (int i = 0; i < positions.count; i++) {
                 meshData.vertices[i].position = toGlm(positions.get(i));
@@ -93,6 +115,10 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
                     meshData.vertices[i].normal = toGlm(normals.get(i));
                 } else {
                     meshData.vertices[i].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+                if (uvs.count > 0) {
+                    ofbx::Vec2 uv = uvs.get(i);
+                    meshData.vertices[i].texCoord = glm::vec2(static_cast<float>(uv.x), static_cast<float>(uv.y));
                 }
             }
             // Generate sequential triangle indices
@@ -115,13 +141,13 @@ std::vector<MeshData> FbxLoader::load(const uint8_t* data, size_t size) {
                 }
             }
             if (!meshData.vertices.empty() && !meshData.indices.empty()) {
-                result.push_back(std::move(meshData));
+                result.meshes.push_back(std::move(meshData));
             }
         }
     }
 
     scene->destroy();
 
-    emscripten_log(EM_LOG_CONSOLE, "FBX loaded: %zu mesh(es)", result.size());
+    emscripten_log(EM_LOG_CONSOLE, "FBX loaded: %zu mesh(es)", result.meshes.size());
     return result;
 }

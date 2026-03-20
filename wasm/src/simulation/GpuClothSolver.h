@@ -25,6 +25,9 @@ public:
     // Upload current CPU particle state to GPU buffers
     void uploadState(wgpu::Queue& queue, const ClothSimulation& sim);
 
+    // Upload a single particle's position + invMass to GPU buffers
+    void uploadSingleParticle(wgpu::Queue& queue, const ClothSimulation& sim, int index);
+
 private:
     void createBuffers(wgpu::Device& device, wgpu::Queue& queue, const ClothSimulation& sim);
     void createPipelines(wgpu::Device& device);

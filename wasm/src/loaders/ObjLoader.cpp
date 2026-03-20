@@ -16,8 +16,8 @@ static glm::vec3 computeFaceNormal(const glm::vec3& v0, const glm::vec3& v1, con
     return glm::vec3(0.0f, 1.0f, 0.0f);
 }
 
-std::vector<MeshData> ObjLoader::load(const uint8_t* data, size_t size) {
-    std::vector<MeshData> result;
+LoadResult ObjLoader::load(const uint8_t* data, size_t size) {
+    LoadResult result;
 
     std::string dataStr(reinterpret_cast<const char*>(data), size);
     std::istringstream stream(dataStr);
@@ -40,10 +40,25 @@ std::vector<MeshData> ObjLoader::load(const uint8_t* data, size_t size) {
 
     const auto& attrib = reader.GetAttrib();
     const auto& shapes = reader.GetShapes();
+    const auto& materials = reader.GetMaterials();
 
     for (const auto& shape : shapes) {
         MeshData meshData;
         std::unordered_map<std::string, uint32_t> uniqueVertices;
+
+        // Determine material for this shape (use first face's material)
+        int matId = -1;
+        if (!shape.mesh.material_ids.empty()) {
+            matId = shape.mesh.material_ids[0];
+        }
+
+        if (matId >= 0 && matId < (int)materials.size()) {
+            const auto& mat = materials[matId];
+            meshData.material.name = mat.name;
+            meshData.material.baseColor = glm::vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
+            meshData.material.metallic = mat.metallic;
+            meshData.material.roughness = mat.roughness;
+        }
 
         size_t indexOffset = 0;
         for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
@@ -112,12 +127,12 @@ std::vector<MeshData> ObjLoader::load(const uint8_t* data, size_t size) {
         }
 
         if (!meshData.vertices.empty()) {
-            result.push_back(std::move(meshData));
+            result.meshes.push_back(std::move(meshData));
         }
     }
 
     // If no shapes, try to create a single mesh from all vertices
-    if (result.empty() && !attrib.vertices.empty()) {
+    if (result.meshes.empty() && !attrib.vertices.empty()) {
         MeshData meshData;
         for (size_t i = 0; i < attrib.vertices.size() / 3; i++) {
             Vertex v{};
@@ -130,9 +145,10 @@ std::vector<MeshData> ObjLoader::load(const uint8_t* data, size_t size) {
             meshData.vertices.push_back(v);
             meshData.indices.push_back(static_cast<uint32_t>(i));
         }
-        result.push_back(std::move(meshData));
+        result.meshes.push_back(std::move(meshData));
     }
 
-    emscripten_log(EM_LOG_CONSOLE, "OBJ loaded: %zu mesh(es)", result.size());
+    emscripten_log(EM_LOG_CONSOLE, "OBJ loaded: %zu mesh(es), %zu material(s)",
+                   result.meshes.size(), materials.size());
     return result;
 }

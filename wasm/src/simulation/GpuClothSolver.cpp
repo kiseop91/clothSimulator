@@ -639,6 +639,21 @@ void GpuClothSolver::uploadState(wgpu::Queue& queue, const ClothSimulation& sim)
     emscripten_log(EM_LOG_CONSOLE, "[GPU Solver] State uploaded (%d particles)", n);
 }
 
+// ─── Upload single particle to GPU ───────────────────────────────────────
+
+void GpuClothSolver::uploadSingleParticle(wgpu::Queue& queue, const ClothSimulation& sim, int index) {
+    if (!initialized_ || index < 0 || index >= numParticles_) return;
+
+    const auto& p = sim.getParticles()[index];
+    float data[4] = { p.position.x, p.position.y, p.position.z, p.invMass };
+    float prevData[4] = { p.prevPosition.x, p.prevPosition.y, p.prevPosition.z, p.invMass };
+    uint64_t offset = static_cast<uint64_t>(index) * 16;
+
+    queue.WriteBuffer(positionsBuffer_, offset, data, 16);
+    queue.WriteBuffer(predictedBuffer_, offset, data, 16);
+    queue.WriteBuffer(prevPositionsBuffer_, offset, prevData, 16);
+}
+
 // ─── Destroy ─────────────────────────────────────────────────────────────
 
 void GpuClothSolver::destroy() {
