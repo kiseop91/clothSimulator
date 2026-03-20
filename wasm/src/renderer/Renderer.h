@@ -11,6 +11,7 @@
 #include "scene/Grid.h"
 #include "simulation/ClothSimulation.h"
 #include "simulation/CollisionBody.h"
+#include "simulation/GpuClothSolver.h"
 
 // PBR uniform block — must match WGSL struct layout
 struct PBRUniforms {
@@ -73,9 +74,19 @@ public:
     void setClothFriction(float f) { clothSim_.setFriction(f); }
     void setSelfCollision(bool enabled) { clothSim_.setSelfCollision(enabled); }
     void setClothThickness(float t) { clothSim_.setClothThickness(t); }
+    void setStretchCompliance(float c) { clothSim_.setStretchCompliance(c); }
+    void setShearCompliance(float c) { clothSim_.setShearCompliance(c); }
+    void setBendCompliance(float c) { clothSim_.setBendCompliance(c); }
+    void setNumSubsteps(int n) { clothSim_.setNumSubsteps(n); }
+    float getStretchCompliance() const { return clothSim_.getStretchCompliance(); }
+    float getShearCompliance() const { return clothSim_.getShearCompliance(); }
+    float getBendCompliance() const { return clothSim_.getBendCompliance(); }
+    int getNumSubsteps() const { return clothSim_.getNumSubsteps(); }
     void convertMeshToCloth(int meshIndex, int pinMode);
     bool isSimulationRunning() const { return clothSim_.isRunning(); }
     ClothSimulation& getClothSim() { return clothSim_; }
+    void setUseGpuSolver(bool use);
+    bool getUseGpuSolver() const { return useGpuSolver_; }
 
     // Collision spheres
     void addCollisionSphere(float x, float y, float z, float radius);
@@ -202,6 +213,8 @@ private:
     // Cloth simulation
     ClothSimulation clothSim_;
     Mesh* clothMesh_;
+    GpuClothSolver gpuSolver_;
+    bool useGpuSolver_ = false;
 
     // Collision sphere visualization
     std::vector<CollisionBody> collisionSpheres_;

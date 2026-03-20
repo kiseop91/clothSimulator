@@ -24,6 +24,26 @@ ClothSimulation::ClothSimulation()
 ClothSimulation::~ClothSimulation() {
 }
 
+// ─── Helper: assign compliance to springs based on type ───
+void ClothSimulation::updateSpringCompliance() {
+    for (auto& s : springs_) {
+        switch (s.type) {
+            case ClothSpring::STRUCTURAL: s.compliance = stretchCompliance_; break;
+            case ClothSpring::SHEAR:      s.compliance = shearCompliance_;   break;
+            case ClothSpring::BEND:       s.compliance = bendCompliance_;    break;
+        }
+    }
+}
+
+// ─── Helper: sort springs for cache locality ───
+void ClothSimulation::sortSpringsForCacheLocality() {
+    std::sort(springs_.begin(), springs_.end(), [](const ClothSpring& a, const ClothSpring& b) {
+        int minA = std::min(a.particleA, a.particleB);
+        int minB = std::min(b.particleA, b.particleB);
+        return minA < minB;
+    });
+}
+
 void ClothSimulation::init(float width, float height, int resX, int resY) {
     resX_ = resX;
     resY_ = resY;
@@ -68,30 +88,30 @@ void ClothSimulation::init(float width, float height, int resX, int resY) {
             // Structural springs
             if (x < resX - 1) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 1, y)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 1, y), rest, ClothSpring::STRUCTURAL);
+                springs_.emplace_back(idx(x, y), idx(x + 1, y), rest, ClothSpring::STRUCTURAL, stretchCompliance_);
             }
             if (y < resY - 1) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x, y + 1)].position);
-                springs_.emplace_back(idx(x, y), idx(x, y + 1), rest, ClothSpring::STRUCTURAL);
+                springs_.emplace_back(idx(x, y), idx(x, y + 1), rest, ClothSpring::STRUCTURAL, stretchCompliance_);
             }
 
             // Shear springs
             if (x < resX - 1 && y < resY - 1) {
                 float rest1 = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 1, y + 1)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 1, y + 1), rest1, ClothSpring::SHEAR);
+                springs_.emplace_back(idx(x, y), idx(x + 1, y + 1), rest1, ClothSpring::SHEAR, shearCompliance_);
 
                 float rest2 = glm::length(particles_[idx(x + 1, y)].position - particles_[idx(x, y + 1)].position);
-                springs_.emplace_back(idx(x + 1, y), idx(x, y + 1), rest2, ClothSpring::SHEAR);
+                springs_.emplace_back(idx(x + 1, y), idx(x, y + 1), rest2, ClothSpring::SHEAR, shearCompliance_);
             }
 
             // Bend springs
             if (x < resX - 2) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 2, y)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 2, y), rest, ClothSpring::BEND);
+                springs_.emplace_back(idx(x, y), idx(x + 2, y), rest, ClothSpring::BEND, bendCompliance_);
             }
             if (y < resY - 2) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x, y + 2)].position);
-                springs_.emplace_back(idx(x, y), idx(x, y + 2), rest, ClothSpring::BEND);
+                springs_.emplace_back(idx(x, y), idx(x, y + 2), rest, ClothSpring::BEND, bendCompliance_);
             }
         }
     }
@@ -144,6 +164,11 @@ void ClothSimulation::init(float width, float height, int resX, int resY) {
     accumulator_ = 0.0;
     initialized_ = true;
     buildNeighborList();
+    sortSpringsForCacheLocality();
+
+    // Preallocate Jacobi solver buffers
+    jacobiDeltas_.resize(particles_.size(), glm::vec3(0.0f));
+    jacobiCounts_.resize(particles_.size(), 0);
 }
 
 void ClothSimulation::initHorizontal(float width, float depth, int resX, int resZ, float dropHeight) {
@@ -187,25 +212,25 @@ void ClothSimulation::initHorizontal(float width, float depth, int resX, int res
         for (int x = 0; x < resX; x++) {
             if (x < resX - 1) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 1, y)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 1, y), rest, ClothSpring::STRUCTURAL);
+                springs_.emplace_back(idx(x, y), idx(x + 1, y), rest, ClothSpring::STRUCTURAL, stretchCompliance_);
             }
             if (y < resZ - 1) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x, y + 1)].position);
-                springs_.emplace_back(idx(x, y), idx(x, y + 1), rest, ClothSpring::STRUCTURAL);
+                springs_.emplace_back(idx(x, y), idx(x, y + 1), rest, ClothSpring::STRUCTURAL, stretchCompliance_);
             }
             if (x < resX - 1 && y < resZ - 1) {
                 float rest1 = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 1, y + 1)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 1, y + 1), rest1, ClothSpring::SHEAR);
+                springs_.emplace_back(idx(x, y), idx(x + 1, y + 1), rest1, ClothSpring::SHEAR, shearCompliance_);
                 float rest2 = glm::length(particles_[idx(x + 1, y)].position - particles_[idx(x, y + 1)].position);
-                springs_.emplace_back(idx(x + 1, y), idx(x, y + 1), rest2, ClothSpring::SHEAR);
+                springs_.emplace_back(idx(x + 1, y), idx(x, y + 1), rest2, ClothSpring::SHEAR, shearCompliance_);
             }
             if (x < resX - 2) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x + 2, y)].position);
-                springs_.emplace_back(idx(x, y), idx(x + 2, y), rest, ClothSpring::BEND);
+                springs_.emplace_back(idx(x, y), idx(x + 2, y), rest, ClothSpring::BEND, bendCompliance_);
             }
             if (y < resZ - 2) {
                 float rest = glm::length(particles_[idx(x, y)].position - particles_[idx(x, y + 2)].position);
-                springs_.emplace_back(idx(x, y), idx(x, y + 2), rest, ClothSpring::BEND);
+                springs_.emplace_back(idx(x, y), idx(x, y + 2), rest, ClothSpring::BEND, bendCompliance_);
             }
         }
     }
@@ -251,6 +276,11 @@ void ClothSimulation::initHorizontal(float width, float depth, int resX, int res
     accumulator_ = 0.0;
     initialized_ = true;
     buildNeighborList();
+    sortSpringsForCacheLocality();
+
+    // Preallocate Jacobi solver buffers
+    jacobiDeltas_.resize(particles_.size(), glm::vec3(0.0f));
+    jacobiCounts_.resize(particles_.size(), 0);
 }
 
 void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
@@ -291,7 +321,7 @@ void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
     springs_.clear();
     for (const auto& edge : edgeSet) {
         float rest = glm::length(particles_[edge.first].position - particles_[edge.second].position);
-        springs_.emplace_back(edge.first, edge.second, rest, ClothSpring::STRUCTURAL);
+        springs_.emplace_back(edge.first, edge.second, rest, ClothSpring::STRUCTURAL, stretchCompliance_);
     }
 
     // 3. Bend springs: connect opposite vertices of adjacent triangles sharing an edge
@@ -312,7 +342,7 @@ void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
         const auto& opposites = pair.second;
         if (opposites.size() == 2 && opposites[0] != opposites[1]) {
             float rest = glm::length(particles_[opposites[0]].position - particles_[opposites[1]].position);
-            springs_.emplace_back(opposites[0], opposites[1], rest, ClothSpring::BEND);
+            springs_.emplace_back(opposites[0], opposites[1], rest, ClothSpring::BEND, bendCompliance_);
         }
     }
 
@@ -332,6 +362,11 @@ void ClothSimulation::initFromMesh(const MeshData& meshData, int pinMode) {
     accumulator_ = 0.0;
     initialized_ = true;
     buildNeighborList();
+    sortSpringsForCacheLocality();
+
+    // Preallocate Jacobi solver buffers
+    jacobiDeltas_.resize(particles_.size(), glm::vec3(0.0f));
+    jacobiCounts_.resize(particles_.size(), 0);
 }
 
 void ClothSimulation::translateAll(float dx, float dy, float dz) {
@@ -340,9 +375,14 @@ void ClothSimulation::translateAll(float dx, float dy, float dz) {
     for (size_t i = 0; i < particles_.size(); i++) {
         particles_[i].position += delta;
         particles_[i].prevPosition += delta;
+        particles_[i].predictedPosition += delta;
         initialPositions_[i] += delta;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// XPBD Simulation Loop (Small Steps strategy)
+// ═══════════════════════════════════════════════════════════════════════
 
 void ClothSimulation::step(double currentTimeMs) {
     if (!initialized_ || !running_) return;
@@ -362,7 +402,7 @@ void ClothSimulation::step(double currentTimeMs) {
 
     accumulator_ += frameDt;
 
-    // Max 2 substeps per frame to prevent excessive computation
+    // Max 2 fixed steps per frame to prevent excessive computation
     int steps = 0;
     while (accumulator_ >= FIXED_DT_MS && steps < 2) {
         substep(static_cast<float>(FIXED_DT_MS / 1000.0), currentTimeMs);
@@ -377,15 +417,27 @@ void ClothSimulation::step(double currentTimeMs) {
 }
 
 void ClothSimulation::substep(float dt, double globalTime) {
-    applyForces(globalTime);
-    verletIntegrate(dt);
-    solveConstraints();
-    handleCollisions();
-    if (selfCollisionEnabled_) {
-        handleSelfCollision();
+    // Small Steps: split dt into numSubsteps_ smaller steps,
+    // each with 1 XPBD solver iteration
+    float subDt = dt / static_cast<float>(numSubsteps_);
+
+    for (int s = 0; s < numSubsteps_; s++) {
+        applyForces(globalTime);
+        predictPositions(subDt);
+
+        // Reset Lagrange multipliers each substep
+        for (auto& spring : springs_) spring.lambda = 0.0f;
+
+        solveXPBDConstraints(subDt);
+        handleCollisionsCCD();
+        if (selfCollisionEnabled_) {
+            handleSelfCollision();
+        }
+        updateVelocities(subDt);
     }
 }
 
+// ─── Force accumulation ───
 void ClothSimulation::applyForces(double globalTime) {
     for (auto& p : particles_) {
         if (p.pinned) continue;
@@ -403,72 +455,181 @@ void ClothSimulation::applyForces(double globalTime) {
     }
 }
 
-void ClothSimulation::verletIntegrate(float dt) {
+// ─── XPBD: Predict positions using explicit Euler ───
+void ClothSimulation::predictPositions(float dt) {
     for (auto& p : particles_) {
-        if (p.pinned) continue;
+        if (p.pinned) {
+            p.predictedPosition = p.position;
+            continue;
+        }
 
-        glm::vec3 velocity = (p.position - p.prevPosition) * (1.0f - damping_);
-        p.prevPosition = p.position;
-        p.position = p.position + velocity + p.acceleration * dt * dt;
+        // Apply damping to velocity
+        p.velocity *= (1.0f - damping_);
+        // Integrate: v += a*dt, x* = x + v*dt
+        p.velocity += p.acceleration * dt;
+        p.predictedPosition = p.position + p.velocity * dt;
     }
 }
 
-void ClothSimulation::solveConstraints() {
-    for (int iter = 0; iter < constraintIterations_; iter++) {
-        for (auto& spring : springs_) {
-            ClothParticle& pA = particles_[spring.particleA];
-            ClothParticle& pB = particles_[spring.particleB];
+// ─── XPBD Constraint Solver (Jacobi for GPU-readiness) ───
+void ClothSimulation::solveXPBDConstraints(float dt) {
+    float dtSq = dt * dt;
+    if (dtSq < 1e-14f) return;
 
-            glm::vec3 delta = pB.position - pA.position;
-            float currentLength = glm::length(delta);
+    int n = static_cast<int>(particles_.size());
 
-            if (currentLength < 1e-7f) continue;
+    // Clear Jacobi accumulation buffers
+    std::fill(jacobiDeltas_.begin(), jacobiDeltas_.begin() + n, glm::vec3(0.0f));
+    std::fill(jacobiCounts_.begin(), jacobiCounts_.begin() + n, 0);
 
-            float diff = (currentLength - spring.restLength) / currentLength;
-            glm::vec3 correction = delta * 0.5f * diff * stiffness_;
+    for (auto& spring : springs_) {
+        ClothParticle& pA = particles_[spring.particleA];
+        ClothParticle& pB = particles_[spring.particleB];
 
-            if (!pA.pinned) pA.position += correction;
-            if (!pB.pinned) pB.position -= correction;
+        glm::vec3 diff = pB.predictedPosition - pA.predictedPosition;
+        float currentLength = glm::length(diff);
+        if (currentLength < 1e-7f) continue;
+
+        // Constraint: C = |xB - xA| - restLength
+        float C = currentLength - spring.restLength;
+
+        // Gradient: ∇C_A = -n, ∇C_B = +n  (where n = normalized diff)
+        glm::vec3 n_dir = diff / currentLength;
+
+        // Weighted gradient sum: w_A * |∇C_A|² + w_B * |∇C_B|²
+        // Since |∇C| = 1 for distance constraint: = w_A + w_B
+        float wA = pA.invMass;
+        float wB = pB.invMass;
+        float wSum = wA + wB;
+        if (wSum < 1e-12f) continue;
+
+        // Compliance: α̃ = α / dt²
+        float alphaTilde = spring.compliance / dtSq;
+
+        // Lagrange multiplier update: Δλ = -(C + α̃·λ) / (w_sum + α̃)
+        float deltaLambda = -(C + alphaTilde * spring.lambda) / (wSum + alphaTilde);
+        spring.lambda += deltaLambda;
+
+        // Position corrections
+        glm::vec3 corrA = -deltaLambda * wA * n_dir;  // ΔxA = Δλ * wA * (-n)
+        glm::vec3 corrB =  deltaLambda * wB * n_dir;  // ΔxB = Δλ * wB * (+n)
+
+        // Jacobi: accumulate corrections
+        jacobiDeltas_[spring.particleA] += corrA;
+        jacobiDeltas_[spring.particleB] += corrB;
+        jacobiCounts_[spring.particleA]++;
+        jacobiCounts_[spring.particleB]++;
+    }
+
+    // Apply averaged Jacobi corrections
+    for (int i = 0; i < n; i++) {
+        if (!particles_[i].pinned && jacobiCounts_[i] > 0) {
+            particles_[i].predictedPosition += jacobiDeltas_[i] / static_cast<float>(jacobiCounts_[i]);
         }
     }
 }
 
-void ClothSimulation::handleCollisions() {
+// ─── CCD Collision Detection (Ray-Sphere + Ground) ───
+void ClothSimulation::handleCollisionsCCD() {
     for (auto& p : particles_) {
         if (p.pinned) continue;
 
+        glm::vec3 movement = p.predictedPosition - p.position;
+
         for (const auto& collider : colliders_) {
-            glm::vec3 toParticle = p.position - collider.center;
-            float dist = glm::length(toParticle);
+            float paddedRadius = collider.radius + clothThickness_;
 
-            if (dist < collider.radius && dist > 1e-7f) {
-                glm::vec3 normal = glm::normalize(toParticle);
-                glm::vec3 newPos = collider.center + normal * (collider.radius + 0.01f);
+            // Ray-sphere intersection: |p.position + t*movement - center|² = paddedRadius²
+            glm::vec3 oc = p.position - collider.center;
+            float a = glm::dot(movement, movement);
+            float b = 2.0f * glm::dot(oc, movement);
+            float c = glm::dot(oc, oc) - paddedRadius * paddedRadius;
 
-                // Friction: decompose velocity into normal and tangent components
-                glm::vec3 velocity = p.position - p.prevPosition;
-                glm::vec3 vTangent = velocity - normal * glm::dot(velocity, normal);
+            // Already inside → push out (discrete fallback)
+            if (c < 0.0f) {
+                float dist = glm::length(oc);
+                if (dist > 1e-7f) {
+                    glm::vec3 normal = oc / dist;
+                    p.predictedPosition = collider.center + normal * (paddedRadius + 0.001f);
+                } else {
+                    // Degenerate: particle exactly at center, push up
+                    p.predictedPosition = collider.center + glm::vec3(0.0f, paddedRadius + 0.001f, 0.0f);
+                }
+                continue;
+            }
 
-                // Apply friction to tangent velocity
-                glm::vec3 frictionVelocity = vTangent * (1.0f - friction_);
+            // No movement → skip CCD (discrete already handled above)
+            if (a < 1e-12f) continue;
 
-                p.position = newPos;
-                p.prevPosition = newPos - frictionVelocity;
+            float discriminant = b * b - 4.0f * a * c;
+            if (discriminant < 0.0f) continue;
+
+            float t = (-b - std::sqrt(discriminant)) / (2.0f * a);
+            if (t >= 0.0f && t <= 1.0f) {
+                // Hit! Project onto surface
+                glm::vec3 hitPos = p.position + t * movement;
+                glm::vec3 normal = glm::normalize(hitPos - collider.center);
+                glm::vec3 surfacePos = collider.center + normal * (paddedRadius + 0.001f);
+
+                // Friction: decompose remaining velocity
+                glm::vec3 remainingVel = p.predictedPosition - hitPos;
+                glm::vec3 vn = normal * glm::dot(remainingVel, normal);
+                glm::vec3 vt = remainingVel - vn;
+
+                p.predictedPosition = surfacePos + vt * (1.0f - friction_);
+
+                // Ensure still outside
+                glm::vec3 toP = p.predictedPosition - collider.center;
+                float toPLen = glm::length(toP);
+                if (toPLen < paddedRadius) {
+                    p.predictedPosition = collider.center + (toP / glm::max(toPLen, 1e-7f)) * (paddedRadius + 0.001f);
+                }
             }
         }
 
         // Ground plane collision (y = 0) with friction
-        // Use small epsilon to prevent z-fighting with grid at y=0
         constexpr float groundEpsilon = 0.005f;
-        if (p.position.y < groundEpsilon) {
-            glm::vec3 velocity = p.position - p.prevPosition;
-            glm::vec3 tangentVel(velocity.x * (1.0f - friction_), 0.0f, velocity.z * (1.0f - friction_));
+        if (p.predictedPosition.y < groundEpsilon) {
+            glm::vec3 vel = p.predictedPosition - p.position;
+            glm::vec3 tangentVel(vel.x * (1.0f - friction_), 0.0f, vel.z * (1.0f - friction_));
 
-            p.position.y = groundEpsilon;
-            p.prevPosition = p.position - tangentVel;
+            p.predictedPosition.y = groundEpsilon;
+            // Preserve tangential movement with friction
+            p.predictedPosition.x = p.position.x + tangentVel.x;
+            p.predictedPosition.z = p.position.z + tangentVel.z;
         }
     }
 }
+
+// ─── Particle movement limiter (tunneling safety net) ───
+void ClothSimulation::limitParticleMovement(float maxDist) {
+    for (auto& p : particles_) {
+        if (p.pinned) continue;
+        glm::vec3 disp = p.predictedPosition - p.position;
+        float dist = glm::length(disp);
+        if (dist > maxDist) {
+            p.predictedPosition = p.position + disp * (maxDist / dist);
+        }
+    }
+}
+
+// ─── XPBD: Update velocities and commit positions ───
+void ClothSimulation::updateVelocities(float dt) {
+    if (dt < 1e-10f) return;
+    float invDt = 1.0f / dt;
+
+    for (auto& p : particles_) {
+        if (p.pinned) continue;
+
+        p.velocity = (p.predictedPosition - p.position) * invDt;
+        p.prevPosition = p.position;
+        p.position = p.predictedPosition;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Utility & Collision (unchanged logic, adapted for predictedPosition)
+// ═══════════════════════════════════════════════════════════════════════
 
 void ClothSimulation::getAABB(glm::vec3& aabbMin, glm::vec3& aabbMax) const {
     if (particles_.empty()) {
@@ -488,6 +649,8 @@ void ClothSimulation::reset() {
     for (size_t i = 0; i < particles_.size(); i++) {
         particles_[i].position = initialPositions_[i];
         particles_[i].prevPosition = initialPositions_[i];
+        particles_[i].predictedPosition = initialPositions_[i];
+        particles_[i].velocity = glm::vec3(0.0f);
         particles_[i].acceleration = glm::vec3(0.0f);
     }
 
@@ -545,8 +708,11 @@ void ClothSimulation::buildNeighborList() {
                   neighborList_.begin() + neighborOffset_[i + 1]);
     }
 
-    // Size spatial hash table
-    hashTableSize_ = (n > 2000) ? 8192 : 2048;
+    // Size spatial hash table proportional to particle count
+    int32_t desiredSize = 1;
+    int32_t target = n / 4;
+    while (desiredSize < target && desiredSize < 65536) desiredSize <<= 1;
+    hashTableSize_ = glm::max(desiredSize, static_cast<int32_t>(2048));
     hashCellStart_.resize(hashTableSize_ + 1);
     hashCellEntries_.resize(n);
 }

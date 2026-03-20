@@ -53,6 +53,11 @@ export interface SimulationState {
   collisionSpheres: CollisionSphere[];
   selectedObjectType: 'none' | 'sphere' | 'cloth';
   selectedObjectIndex: number;
+  stretchCompliance: number;
+  shearCompliance: number;
+  bendCompliance: number;
+  numSubsteps: number;
+  useGpuSolver: boolean;
 }
 
 export interface RendererBridge {
@@ -83,6 +88,11 @@ export interface RendererBridge {
   setClothFriction: (value: number) => void;
   setSelfCollision: (enabled: boolean) => void;
   setClothThickness: (value: number) => void;
+  setStretchCompliance: (value: number) => void;
+  setShearCompliance: (value: number) => void;
+  setBendCompliance: (value: number) => void;
+  setNumSubsteps: (value: number) => void;
+  setUseGpuSolver: (use: boolean) => void;
   selectCloth: () => void;
   convertMeshToCloth: (meshIndex: number, pinMode: number) => void;
   getLoadedMeshCount: () => number;
@@ -164,6 +174,11 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     collisionSpheres: [],
     selectedObjectType: 'none',
     selectedObjectIndex: -1,
+    stretchCompliance: 0.0,
+    shearCompliance: 0.0001,
+    bendCompliance: 0.01,
+    numSubsteps: 20,
+    useGpuSolver: false,
   });
 
   const moduleRef = useRef(module);
@@ -301,6 +316,31 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
   const setClothThickness = useCallback((value: number) => {
     setSimulation((prev) => ({ ...prev, clothThickness: value }));
     moduleRef.current?.setClothThickness(value);
+  }, []);
+
+  const setStretchCompliance = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, stretchCompliance: value }));
+    moduleRef.current?.setStretchCompliance(value);
+  }, []);
+
+  const setShearCompliance = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, shearCompliance: value }));
+    moduleRef.current?.setShearCompliance(value);
+  }, []);
+
+  const setBendCompliance = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, bendCompliance: value }));
+    moduleRef.current?.setBendCompliance(value);
+  }, []);
+
+  const setNumSubsteps = useCallback((value: number) => {
+    setSimulation((prev) => ({ ...prev, numSubsteps: value }));
+    moduleRef.current?.setNumSubsteps(value);
+  }, []);
+
+  const setUseGpuSolver = useCallback((use: boolean) => {
+    setSimulation((prev) => ({ ...prev, useGpuSolver: use }));
+    moduleRef.current?.setUseGpuSolver(use);
   }, []);
 
   const selectCloth = useCallback(() => {
@@ -543,6 +583,11 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     setClothFriction,
     setSelfCollision,
     setClothThickness,
+    setStretchCompliance,
+    setShearCompliance,
+    setBendCompliance,
+    setNumSubsteps,
+    setUseGpuSolver,
     selectCloth,
     convertMeshToCloth,
     getLoadedMeshCount,

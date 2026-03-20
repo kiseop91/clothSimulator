@@ -552,11 +552,17 @@ void Renderer::stepAndRender(double time) {
     double frameStart = emscripten_performance_now();
 
     if (clothSim_.isInitialized() && clothSim_.isRunning()) {
-        clothSim_.step(time);
-        if (clothMesh_) {
-            const MeshData& meshData = clothSim_.generateMeshData();
-            clothMesh_->updateVertices(queue_, meshData.vertices);
-            clothMesh_->updateWireVertices(queue_, meshData.vertices, meshData.indices);
+        if (useGpuSolver_ && gpuSolver_.isInitialized()) {
+            // GPU path: compute shader simulation
+            gpuSolver_.step(device_, queue_, clothSim_, time, collisionSpheres_);
+        } else {
+            // CPU fallback
+            clothSim_.step(time);
+            if (clothMesh_) {
+                const MeshData& meshData = clothSim_.generateMeshData();
+                clothMesh_->updateVertices(queue_, meshData.vertices);
+                clothMesh_->updateWireVertices(queue_, meshData.vertices, meshData.indices);
+            }
         }
     }
 
@@ -618,9 +624,11 @@ void Renderer::renderShadowPass(wgpu::CommandEncoder& encoder) {
         su.lightSpaceMatrix = lightSpaceMatrix_;
         queue_.WriteBuffer(shadowUniformBuffer_, 0, &su, sizeof(su));
         pass.SetBindGroup(0, shadowBindGroup_);
-        pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
-        pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
-        pass.DrawIndexed(clothMesh_->getIndexCount());
+
+        bool gpuActive = useGpuSolver_ && gpuSolver_.isInitialized();
+        pass.SetVertexBuffer(0, gpuActive ? gpuSolver_.getVertexBuffer() : clothMesh_->getVertexBuffer());
+        pass.SetIndexBuffer(gpuActive ? gpuSolver_.getIndexBuffer() : clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+        pass.DrawIndexed(gpuActive ? gpuSolver_.getIndexCount() : clothMesh_->getIndexCount());
     }
 
     pass.End();
@@ -768,7 +776,13 @@ void Renderer::renderFrame() {
 
     // Cloth (two-pass or wireframe)
     if (clothMesh_ && clothMesh_->isVisible()) {
-        if (wireframeMode_ && clothMesh_->getWireVertexCount() > 0 && wireDrawIndex_ < MAX_WIRE_DRAWS) {
+        bool gpuActive = useGpuSolver_ && gpuSolver_.isInitialized();
+        auto clothVB = gpuActive ? gpuSolver_.getVertexBuffer() : clothMesh_->getVertexBuffer();
+        auto clothIB = gpuActive ? gpuSolver_.getIndexBuffer() : clothMesh_->getIndexBuffer();
+        int clothIC = gpuActive ? gpuSolver_.getIndexCount() : clothMesh_->getIndexCount();
+
+        // Skip wireframe in GPU mode (v1)
+        if (!gpuActive && wireframeMode_ && clothMesh_->getWireVertexCount() > 0 && wireDrawIndex_ < MAX_WIRE_DRAWS) {
             WireUniforms wu{};
             wu.model = glm::mat4(1.0f);
             wu.view = view;
@@ -787,18 +801,18 @@ void Renderer::renderFrame() {
             // Pass 1: back faces with depth bias
             pass.SetPipeline(pbrBackfacePipeline_);
             pass.SetBindGroup(0, pbrBindGroup_);
-            pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
-            pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            pass.SetVertexBuffer(0, clothVB);
+            pass.SetIndexBuffer(clothIB, wgpu::IndexFormat::Uint32);
             diag_.drawCallsPerFrame++;
-            pass.DrawIndexed(clothMesh_->getIndexCount());
+            pass.DrawIndexed(clothIC);
 
             // Pass 2: front faces
             pass.SetPipeline(pbrPipeline_);
             pass.SetBindGroup(0, pbrBindGroup_);
-            pass.SetVertexBuffer(0, clothMesh_->getVertexBuffer());
-            pass.SetIndexBuffer(clothMesh_->getIndexBuffer(), wgpu::IndexFormat::Uint32);
+            pass.SetVertexBuffer(0, clothVB);
+            pass.SetIndexBuffer(clothIB, wgpu::IndexFormat::Uint32);
             diag_.drawCallsPerFrame++;
-            pass.DrawIndexed(clothMesh_->getIndexCount());
+            pass.DrawIndexed(clothIC);
         }
     }
 
@@ -865,25 +879,44 @@ void Renderer::clearDiffuseTexture() {
     rebuildPBRBindGroup();
 }
 
+void Renderer::setUseGpuSolver(bool use) {
+    if (use == useGpuSolver_) return;
+    useGpuSolver_ = use;
+
+    if (use && clothSim_.isInitialized()) {
+        if (!gpuSolver_.isInitialized()) {
+            gpuSolver_.init(device_, queue_, clothSim_);
+        } else {
+            gpuSolver_.uploadState(queue_, clothSim_);
+        }
+    }
+    emscripten_log(EM_LOG_CONSOLE, "GPU Solver: %s", use ? "ON" : "OFF");
+}
+
 void Renderer::addClothMesh(float width, float height, int resX, int resY) {
     if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    gpuSolver_.destroy();
     clothSim_.init(width, height, resX, resY);
     syncCollidersToSim();
     const MeshData& initial = clothSim_.generateMeshData();
     clothMesh_ = new Mesh();
     clothMesh_->initDynamic(device_, initial);
     clothMesh_->setName("cloth");
+    // Initialize GPU solver
+    gpuSolver_.init(device_, queue_, clothSim_);
     emscripten_log(EM_LOG_CONSOLE, "Cloth mesh created: %dx%d", resX, resY);
 }
 
 void Renderer::addClothMeshHorizontal(float width, float depth, int resX, int resZ, float dropHeight) {
     if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    gpuSolver_.destroy();
     clothSim_.initHorizontal(width, depth, resX, resZ, dropHeight);
     syncCollidersToSim();
     const MeshData& initial = clothSim_.generateMeshData();
     clothMesh_ = new Mesh();
     clothMesh_->initDynamic(device_, initial);
     clothMesh_->setName("cloth");
+    gpuSolver_.init(device_, queue_, clothSim_);
     emscripten_log(EM_LOG_CONSOLE, "Horizontal cloth: %dx%d at h=%.1f", resX, resZ, dropHeight);
 }
 
@@ -901,12 +934,14 @@ void Renderer::convertMeshToCloth(int meshIndex, int pinMode) {
     const auto& cache = scene_.getMeshDataCache();
     if (meshIndex < 0 || meshIndex >= (int)cache.size()) return;
     if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    gpuSolver_.destroy();
     clothSim_.initFromMesh(cache[meshIndex], pinMode);
     syncCollidersToSim();
     const MeshData& initial = clothSim_.generateMeshData();
     clothMesh_ = new Mesh();
     clothMesh_->initDynamic(device_, initial);
     clothMesh_->setName("cloth");
+    gpuSolver_.init(device_, queue_, clothSim_);
     auto& meshes = scene_.getMeshes();
     if (meshIndex < (int)meshes.size()) meshes[meshIndex]->setVisible(false);
     emscripten_log(EM_LOG_CONSOLE, "Mesh %d → cloth (%zu verts, pin=%d)", meshIndex, cache[meshIndex].vertices.size(), pinMode);
@@ -1025,6 +1060,7 @@ void Renderer::destroy() {
     if (!initialized_) return;
     emscripten_cancel_main_loop();
 
+    gpuSolver_.destroy();
     if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
     collisionSpheres_.clear();
 

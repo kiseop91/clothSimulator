@@ -36,6 +36,18 @@ public:
     void setClothThickness(float t) { clothThickness_ = glm::clamp(t, 0.005f, 0.2f); }
     float getClothThickness() const { return clothThickness_; }
 
+    // XPBD compliance parameters
+    void setStretchCompliance(float c) { stretchCompliance_ = glm::max(c, 0.0f); updateSpringCompliance(); }
+    void setShearCompliance(float c) { shearCompliance_ = glm::max(c, 0.0f); updateSpringCompliance(); }
+    void setBendCompliance(float c) { bendCompliance_ = glm::max(c, 0.0f); updateSpringCompliance(); }
+    float getStretchCompliance() const { return stretchCompliance_; }
+    float getShearCompliance() const { return shearCompliance_; }
+    float getBendCompliance() const { return bendCompliance_; }
+
+    // Substep control
+    void setNumSubsteps(int n) { numSubsteps_ = glm::clamp(n, 1, 100); }
+    int getNumSubsteps() const { return numSubsteps_; }
+
     const glm::vec3& getGravity() const { return gravity_; }
     const glm::vec3& getWindForce() const { return windForce_; }
     float getStiffness() const { return stiffness_; }
@@ -55,12 +67,21 @@ public:
     int getResX() const { return resX_; }
     int getResY() const { return resY_; }
 
+    // Accessors for GPU solver
+    const std::vector<ClothParticle>& getParticles() const { return particles_; }
+    const std::vector<ClothSpring>& getSprings() const { return springs_; }
+    const MeshData& getCachedMeshData() const { return cachedMeshData_; }
+
 private:
     void substep(float dt, double globalTime);
     void applyForces(double globalTime);
-    void verletIntegrate(float dt);
-    void solveConstraints();
-    void handleCollisions();
+    void predictPositions(float dt);
+    void solveXPBDConstraints(float dt);
+    void handleCollisionsCCD();
+    void limitParticleMovement(float maxDist);
+    void updateVelocities(float dt);
+    void updateSpringCompliance();
+    void sortSpringsForCacheLocality();
     void buildNeighborList();
     void buildSpatialHash();
     void handleSelfCollision();
@@ -76,6 +97,10 @@ private:
     std::vector<ClothSpring> springs_;
     std::vector<CollisionBody> colliders_;
 
+    // Jacobi solver buffers (preallocated)
+    std::vector<glm::vec3> jacobiDeltas_;
+    std::vector<int> jacobiCounts_;
+
     // Initial positions for reset
     std::vector<glm::vec3> initialPositions_;
 
@@ -89,6 +114,14 @@ private:
     float damping_;
     float friction_;
     int constraintIterations_;
+
+    // XPBD compliance (per constraint type)
+    float stretchCompliance_ = 0.0f;     // very stiff
+    float shearCompliance_ = 0.0001f;
+    float bendCompliance_ = 0.01f;
+
+    // Substeps (Small Steps strategy)
+    int numSubsteps_ = 20;
 
     // Timing
     double lastTime_;

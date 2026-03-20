@@ -31,7 +31,17 @@ export interface WasmModule {
   setClothFriction(value: number): void;
   setSelfCollision(enabled: boolean): void;
   setClothThickness(thickness: number): void;
+  setStretchCompliance(compliance: number): void;
+  setShearCompliance(compliance: number): void;
+  setBendCompliance(compliance: number): void;
+  setNumSubsteps(n: number): void;
+  getStretchCompliance(): number;
+  getShearCompliance(): number;
+  getBendCompliance(): number;
+  getNumSubsteps(): number;
   isSimulationRunning(): boolean;
+  setUseGpuSolver(use: boolean): void;
+  getUseGpuSolver(): boolean;
   convertMeshToCloth(meshIndex: number, pinMode: number): void;
   getLoadedMeshCount(): number;
   getLoadedMeshName(index: number): string;

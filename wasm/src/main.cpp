@@ -194,8 +194,48 @@ void setClothThickness(float t) {
     g_rendererInstance.setClothThickness(t);
 }
 
+void setStretchCompliance(float c) {
+    g_rendererInstance.setStretchCompliance(c);
+}
+
+void setShearCompliance(float c) {
+    g_rendererInstance.setShearCompliance(c);
+}
+
+void setBendCompliance(float c) {
+    g_rendererInstance.setBendCompliance(c);
+}
+
+void setNumSubsteps(int n) {
+    g_rendererInstance.setNumSubsteps(n);
+}
+
+float getStretchCompliance() {
+    return g_rendererInstance.getStretchCompliance();
+}
+
+float getShearCompliance() {
+    return g_rendererInstance.getShearCompliance();
+}
+
+float getBendCompliance() {
+    return g_rendererInstance.getBendCompliance();
+}
+
+int getNumSubsteps() {
+    return g_rendererInstance.getNumSubsteps();
+}
+
 bool isSimulationRunning() {
     return g_rendererInstance.isSimulationRunning();
+}
+
+void setUseGpuSolver(bool use) {
+    g_rendererInstance.setUseGpuSolver(use);
+}
+
+bool getUseGpuSolver() {
+    return g_rendererInstance.getUseGpuSolver();
 }
 
 // Horizontal cloth (drop from above)
@@ -409,7 +449,17 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
     emscripten::function("setClothFriction", &setClothFriction);
     emscripten::function("setSelfCollision", &setSelfCollision);
     emscripten::function("setClothThickness", &setClothThickness);
+    emscripten::function("setStretchCompliance", &setStretchCompliance);
+    emscripten::function("setShearCompliance", &setShearCompliance);
+    emscripten::function("setBendCompliance", &setBendCompliance);
+    emscripten::function("setNumSubsteps", &setNumSubsteps);
+    emscripten::function("getStretchCompliance", &getStretchCompliance);
+    emscripten::function("getShearCompliance", &getShearCompliance);
+    emscripten::function("getBendCompliance", &getBendCompliance);
+    emscripten::function("getNumSubsteps", &getNumSubsteps);
     emscripten::function("isSimulationRunning", &isSimulationRunning);
+    emscripten::function("setUseGpuSolver", &setUseGpuSolver);
+    emscripten::function("getUseGpuSolver", &getUseGpuSolver);
 
     // Horizontal cloth
     emscripten::function("addClothMeshHorizontal", &addClothMeshHorizontal);

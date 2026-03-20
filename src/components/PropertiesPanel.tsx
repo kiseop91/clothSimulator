@@ -1,6 +1,76 @@
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { Move, Box, Palette, Layers, Wind, Play, Pause, RotateCcw, Plus, Circle, Trash2, ArrowDown, Shirt, Eye, EyeOff, Image, Sun } from "lucide-react";
 import { useRenderer } from "../context/RendererContext.tsx";
+
+// Mobile-friendly numeric input that allows typing "-", ".", and clearing
+function NumericInput({
+  value,
+  onChange,
+  step,
+  min,
+  max,
+  placeholder,
+  className,
+  fallback = 0,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  step?: number;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+  className?: string;
+  fallback?: number;
+}) {
+  const [text, setText] = useState(String(value));
+  const focused = useRef(false);
+
+  // Sync external value changes when not focused
+  useEffect(() => {
+    if (!focused.current) {
+      setText(String(value));
+    }
+  }, [value]);
+
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    setText(raw);
+    // Allow partial input: "-", ".", "-.", empty
+    if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+    const num = parseFloat(raw);
+    if (!isNaN(num)) {
+      onChange(num);
+    }
+  }, [onChange]);
+
+  const handleBlur = useCallback(() => {
+    focused.current = false;
+    const num = parseFloat(text);
+    if (isNaN(num) || text === "" || text === "-" || text === ".") {
+      onChange(fallback);
+      setText(String(fallback));
+    } else {
+      onChange(num);
+      setText(String(num));
+    }
+  }, [text, onChange, fallback]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      placeholder={placeholder}
+      step={step}
+      min={min}
+      max={max}
+      value={text}
+      onChange={handleChange}
+      onFocus={() => { focused.current = true; }}
+      onBlur={handleBlur}
+      className={className ?? "bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"}
+    />
+  );
+}
 
 export default function PropertiesPanel() {
   const { bridge } = useRenderer();
@@ -114,15 +184,18 @@ function Vec3Group({
   onChange: (x: number, y: number, z: number) => void;
 }) {
   const axes = ["X", "Y", "Z"] as const;
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
-  const handleChange = useCallback(
-    (index: number, val: number) => {
-      const next: [number, number, number] = [...values];
-      next[index] = val;
-      onChange(next[0], next[1], next[2]);
-    },
-    [values, onChange]
-  );
+  const handlers = useRef(
+    axes.map((_, i) => (val: number) => {
+      const next: [number, number, number] = [...valuesRef.current];
+      next[i] = val;
+      onChangeRef.current(next[0], next[1], next[2]);
+    })
+  ).current;
 
   return (
     <div>
@@ -131,14 +204,12 @@ function Vec3Group({
       </label>
       <div className="grid grid-cols-3 gap-2">
         {axes.map((axis, i) => (
-          <input
+          <NumericInput
             key={axis}
-            type="number"
             placeholder={axis}
             step={step}
             value={values[i]}
-            onChange={(e) => handleChange(i, parseFloat(e.target.value) || 0)}
-            className="bg-gray-700 text-white text-xs px-2 py-1.5 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
+            onChange={handlers[i]}
           />
         ))}
       </div>
@@ -277,22 +348,22 @@ function MaterialSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["b
       <div>
         <label className="text-xs text-gray-400 mb-1 block">UV Tiling</label>
         <div className="grid grid-cols-2 gap-2">
-          <input type="number" step={0.1} value={bridge.uvSettings.tiling[0]}
-            onChange={(e) => bridge.setUVTiling(parseFloat(e.target.value) || 1, bridge.uvSettings.tiling[1])}
+          <NumericInput step={0.1} value={bridge.uvSettings.tiling[0]} fallback={1}
+            onChange={(v) => bridge.setUVTiling(v, bridge.uvSettings.tiling[1])}
             className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="U" />
-          <input type="number" step={0.1} value={bridge.uvSettings.tiling[1]}
-            onChange={(e) => bridge.setUVTiling(bridge.uvSettings.tiling[0], parseFloat(e.target.value) || 1)}
+          <NumericInput step={0.1} value={bridge.uvSettings.tiling[1]} fallback={1}
+            onChange={(v) => bridge.setUVTiling(bridge.uvSettings.tiling[0], v)}
             className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="V" />
         </div>
       </div>
       <div>
         <label className="text-xs text-gray-400 mb-1 block">UV Offset</label>
         <div className="grid grid-cols-2 gap-2">
-          <input type="number" step={0.1} value={bridge.uvSettings.offset[0]}
-            onChange={(e) => bridge.setUVOffset(parseFloat(e.target.value) || 0, bridge.uvSettings.offset[1])}
+          <NumericInput step={0.1} value={bridge.uvSettings.offset[0]} fallback={0}
+            onChange={(v) => bridge.setUVOffset(v, bridge.uvSettings.offset[1])}
             className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="U" />
-          <input type="number" step={0.1} value={bridge.uvSettings.offset[1]}
-            onChange={(e) => bridge.setUVOffset(bridge.uvSettings.offset[0], parseFloat(e.target.value) || 0)}
+          <NumericInput step={0.1} value={bridge.uvSettings.offset[1]} fallback={0}
+            onChange={(v) => bridge.setUVOffset(bridge.uvSettings.offset[0], v)}
             className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" placeholder="V" />
         </div>
       </div>
@@ -402,7 +473,7 @@ function LoadedMeshesSection({ bridge }: { bridge: ReturnType<typeof useRenderer
 // --- Simulation ---
 
 function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>["bridge"] }) {
-  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, setSelfCollision, setClothThickness, selectCloth, translateCloth } = bridge;
+  const { simulation, addClothMesh, addClothMeshHorizontal, toggleSimulation, resetCloth, setGravity, setWindForce, setClothStiffness, setClothDamping, setClothFriction, setSelfCollision, setClothThickness, setStretchCompliance, setShearCompliance, setBendCompliance, setNumSubsteps, setUseGpuSolver, selectCloth, translateCloth } = bridge;
 
   const [clothWidth, setClothWidth] = useState(3.0);
   const [clothHeight, setClothHeight] = useState(3.0);
@@ -427,26 +498,26 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-[10px] text-gray-500 block">Width</label>
-            <input type="number" min={0.5} max={10} step={0.5} value={clothWidth}
-              onChange={(e) => setClothWidth(parseFloat(e.target.value) || 0.5)}
+            <NumericInput min={0.5} max={10} step={0.5} value={clothWidth} fallback={0.5}
+              onChange={setClothWidth}
               className="w-full bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
           </div>
           <div>
             <label className="text-[10px] text-gray-500 block">Height</label>
-            <input type="number" min={0.5} max={10} step={0.5} value={clothHeight}
-              onChange={(e) => setClothHeight(parseFloat(e.target.value) || 0.5)}
+            <NumericInput min={0.5} max={10} step={0.5} value={clothHeight} fallback={0.5}
+              onChange={setClothHeight}
               className="w-full bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
           </div>
           <div>
             <label className="text-[10px] text-gray-500 block">Resolution</label>
-            <input type="number" min={5} max={60} step={5} value={clothRes}
-              onChange={(e) => setClothRes(parseInt(e.target.value) || 5)}
+            <NumericInput min={5} max={600} step={5} value={clothRes} fallback={5}
+              onChange={(v) => setClothRes(Math.round(v))}
               className="w-full bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
           </div>
           <div>
             <label className="text-[10px] text-gray-500 block">Drop Height</label>
-            <input type="number" min={1} max={20} step={0.5} value={dropHeight}
-              onChange={(e) => setDropHeight(parseFloat(e.target.value) || 1)}
+            <NumericInput min={1} max={20} step={0.5} value={dropHeight} fallback={1}
+              onChange={setDropHeight}
               className="w-full bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
           </div>
         </div>
@@ -497,6 +568,28 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
         </div>
       )}
 
+      {/* GPU/CPU Toggle */}
+      {simulation.clothAdded && (
+        <div className="flex items-center gap-2 bg-gray-700/50 px-3 py-2 rounded">
+          <label className="text-xs text-gray-400 flex-1">GPU Compute Solver</label>
+          <button
+            onClick={() => setUseGpuSolver(!simulation.useGpuSolver)}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
+              simulation.useGpuSolver ? "bg-green-500" : "bg-gray-600"
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                simulation.useGpuSolver ? "translate-x-4.5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+          <span className={`text-[10px] font-medium ${simulation.useGpuSolver ? "text-green-400" : "text-gray-500"}`}>
+            {simulation.useGpuSolver ? "GPU" : "CPU"}
+          </span>
+        </div>
+      )}
+
       {/* Physics parameters */}
       {simulation.clothAdded && (
         <div className="space-y-2">
@@ -522,6 +615,35 @@ function SimulationSection({ bridge }: { bridge: ReturnType<typeof useRenderer>[
             <input type="range" min={0} max={1} step={0.01} value={simulation.friction}
               onChange={(e) => setClothFriction(parseFloat(e.target.value))}
               className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+          </div>
+
+          {/* XPBD Parameters */}
+          <div className="border-t border-gray-700 pt-2 mt-1">
+            <label className="text-[10px] text-gray-500 block mb-1">XPBD Solver</label>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Substeps ({simulation.numSubsteps})</label>
+              <input type="range" min={1} max={60} step={1} value={simulation.numSubsteps}
+                onChange={(e) => setNumSubsteps(parseInt(e.target.value))}
+                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Stretch Compliance ({simulation.stretchCompliance.toFixed(4)})</label>
+              <input type="range" min={0} max={0.01} step={0.0001} value={simulation.stretchCompliance}
+                onChange={(e) => setStretchCompliance(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Shear Compliance ({simulation.shearCompliance.toFixed(4)})</label>
+              <input type="range" min={0} max={0.01} step={0.0001} value={simulation.shearCompliance}
+                onChange={(e) => setShearCompliance(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Bend Compliance ({simulation.bendCompliance.toFixed(3)})</label>
+              <input type="range" min={0} max={1} step={0.001} value={simulation.bendCompliance}
+                onChange={(e) => setBendCompliance(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
