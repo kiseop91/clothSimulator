@@ -7,6 +7,7 @@
 #include "simulation/ClothSpring.h"
 #include "simulation/CollisionBody.h"
 #include "simulation/IClothSolver.h"
+#include "simulation/MeshCollider.h"
 #include "mesh/MeshData.h"
 
 class ClothSimulation {
@@ -63,6 +64,9 @@ public:
     // Collision
     void clearColliders() { colliders_.clear(); }
     void addCollider(const CollisionBody& body) { colliders_.push_back(body); }
+    void addMeshCollider(const MeshData& meshData);
+    void clearMeshColliders() { meshColliders_.clear(); }
+    const std::vector<MeshCollider>& getMeshColliders() const { return meshColliders_; }
 
     // Translation
     void translateAll(float dx, float dy, float dz);
@@ -77,6 +81,17 @@ public:
 
     // AABB for picking
     void getAABB(glm::vec3& aabbMin, glm::vec3& aabbMax) const;
+
+    // Measurement API
+    float getMaxVelocity() const;
+    float getAvgVelocity() const;
+    float getKineticEnergy() const;
+    bool isSettled(float threshold = 0.01f) const;
+    float getLowestY() const;
+    float getAvgStretchRatio() const;
+    float getMaxStretchRatio() const;
+    int getParticleCount() const { return static_cast<int>(particles_.size()); }
+    int getSpringCount() const { return static_cast<int>(springs_.size()); }
 
     int getResX() const { return resX_; }
     int getResY() const { return resY_; }
@@ -104,6 +119,7 @@ private:
     std::vector<ClothParticle> particles_;
     std::vector<ClothSpring> springs_;
     std::vector<CollisionBody> colliders_;
+    std::vector<MeshCollider> meshColliders_;
 
     // Initial positions for reset
     std::vector<glm::vec3> initialPositions_;

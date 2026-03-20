@@ -1025,18 +1025,11 @@ void Renderer::removeCollisionSphere(int index) {
 
 void Renderer::syncCollidersToSim() {
     clothSim_.clearColliders();
+    clothSim_.clearMeshColliders();
     for (const auto& s : collisionSpheres_) clothSim_.addCollider(s);
     for (const auto& md : scene_.getMeshDataCache()) {
         if (md.vertices.empty()) continue;
-        glm::vec3 center(0.0f);
-        for (const auto& v : md.vertices) center += v.position;
-        center /= float(md.vertices.size());
-        float maxDist = 0.0f;
-        for (const auto& v : md.vertices) {
-            float d = glm::length(v.position - center);
-            if (d > maxDist) maxDist = d;
-        }
-        clothSim_.addCollider(CollisionBody(center, maxDist + 0.05f));
+        clothSim_.addMeshCollider(md);  // BVH triangle collision
     }
 }
 

@@ -9,9 +9,11 @@ public:
     void prepare(SolverContext& ctx) override;
     void step(SolverContext& ctx, float dt) override;
 
-    void setStretchCompliance(float c) override { stretchCompliance_ = glm::max(c, 0.0f); }
-    void setShearCompliance(float c) override { shearCompliance_ = glm::max(c, 0.0f); }
-    void setBendCompliance(float c) override { bendCompliance_ = glm::max(c, 0.0f); }
+    void setStretchCompliance(float c) override { stretchCompliance_ = glm::max(c, 0.0f); complianceDirty_ = true; }
+    void setShearCompliance(float c) override { shearCompliance_ = glm::max(c, 0.0f); complianceDirty_ = true; }
+    void setBendCompliance(float c) override { bendCompliance_ = glm::max(c, 0.0f); complianceDirty_ = true; }
+    void setConstraintIterations(int n) override { constraintIters_ = glm::clamp(n, 1, 10); }
+    int getConstraintIterations() const override { return constraintIters_; }
     void setNumSubsteps(int n) override { numSubsteps_ = glm::clamp(n, 1, 100); }
 
     float getStretchCompliance() const override { return stretchCompliance_; }
@@ -32,6 +34,8 @@ private:
     float stretchCompliance_ = 0.0f;
     float shearCompliance_ = 0.0001f;
     float bendCompliance_ = 0.01f;
+    bool complianceDirty_ = false;
+    int constraintIters_ = 2;  // Jacobi iterations per substep
     int numSubsteps_ = 20;
 
     // Jacobi solver buffers

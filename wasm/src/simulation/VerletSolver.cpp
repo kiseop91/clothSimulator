@@ -2,6 +2,7 @@
 #include "simulation/ClothParticle.h"
 #include "simulation/ClothSpring.h"
 #include "simulation/CollisionBody.h"
+#include "simulation/MeshCollider.h"
 #include <cmath>
 #include <algorithm>
 
@@ -67,19 +68,33 @@ void VerletSolver::handleCollisions(SolverContext& ctx) {
         if (p.pinned) continue;
 
         for (const auto& collider : ctx.colliders) {
+            float paddedRadius = collider.radius + ctx.clothThickness;
             glm::vec3 toParticle = p.position - collider.center;
             float dist = glm::length(toParticle);
 
-            if (dist < collider.radius && dist > 1e-7f) {
+            if (dist < paddedRadius && dist > 1e-7f) {
                 glm::vec3 normal = glm::normalize(toParticle);
-                glm::vec3 newPos = collider.center + normal * (collider.radius + 0.01f);
+                glm::vec3 newPos = collider.center + normal * (paddedRadius + 0.001f);
 
                 glm::vec3 velocity = p.position - p.prevPosition;
                 glm::vec3 vTangent = velocity - normal * glm::dot(velocity, normal);
                 glm::vec3 frictionVelocity = vTangent * (1.0f - ctx.friction);
 
                 p.position = newPos;
-                p.prevPosition = newPos - frictionVelocity;
+                // Dampen post-collision velocity to reduce bouncing
+                p.prevPosition = newPos - frictionVelocity * 0.5f;
+            }
+        }
+
+        // Mesh triangle collisions
+        for (const auto& meshCol : ctx.meshColliders) {
+            glm::vec3 correction, triNormal;
+            if (meshCol.pointCollision(p.position, ctx.clothThickness, correction, triNormal)) {
+                p.position += correction;
+                glm::vec3 velocity = p.position - p.prevPosition;
+                float vn = glm::dot(velocity, triNormal);
+                glm::vec3 vTangent = velocity - triNormal * vn;
+                p.prevPosition = p.position - vTangent * (1.0f - ctx.friction);
             }
         }
 

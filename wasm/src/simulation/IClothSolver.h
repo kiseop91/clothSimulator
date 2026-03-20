@@ -7,12 +7,14 @@
 struct ClothParticle;
 struct ClothSpring;
 struct CollisionBody;
+class MeshCollider;
 
 // Data passed from ClothSimulation to the active solver
 struct SolverContext {
     std::vector<ClothParticle>& particles;
     std::vector<ClothSpring>& springs;
     const std::vector<CollisionBody>& colliders;
+    const std::vector<MeshCollider>& meshColliders;
 
     glm::vec3 gravity;
     glm::vec3 windForce;

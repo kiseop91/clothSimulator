@@ -253,6 +253,62 @@ void GpuClothSolver::createBuffers(wgpu::Device& device, wgpu::Queue& queue,
         collidersBuffer_ = createGpuBuffer(device, colliderSize, storageUsage);
     }
 
+    // ── Mesh collider BVH + triangle buffers ──
+    {
+        const auto& meshColliders = sim.getMeshColliders();
+        numMeshTris_ = 0;
+        numBVHNodes_ = 0;
+
+        // Aggregate all mesh colliders into single buffers
+        std::vector<glm::vec4> allTriData;
+        std::vector<glm::vec4> allBVHData;
+
+        for (const auto& mc : meshColliders) {
+            int triOffset = numMeshTris_;
+            int nodeOffset = numBVHNodes_;
+            numMeshTris_ += mc.getTriangleCount();
+            numBVHNodes_ += mc.getBVHNodeCount();
+
+            // Copy triangle data (no offset needed, indices are absolute)
+            const auto& td = mc.getTriangleData();
+            allTriData.insert(allTriData.end(), td.begin(), td.end());
+
+            // Copy BVH data with offset adjustments for child indices and triStart
+            const auto& bd = mc.getBVHData();
+            for (size_t i = 0; i < bd.size() / 3; i++) {
+                glm::vec4 n0 = bd[i * 3 + 0]; // aabbMin + leftChild
+                glm::vec4 n1 = bd[i * 3 + 1]; // aabbMax + rightChild
+                glm::vec4 n2 = bd[i * 3 + 2]; // triStart + triCount
+
+                // Offset child indices
+                if (n0.w >= 0.0f) n0.w += static_cast<float>(nodeOffset);
+                if (n1.w >= 0.0f) n1.w += static_cast<float>(nodeOffset);
+                // Offset triStart
+                n2.x += static_cast<float>(triOffset);
+
+                allBVHData.push_back(n0);
+                allBVHData.push_back(n1);
+                allBVHData.push_back(n2);
+            }
+        }
+
+        // Ensure minimum buffer size (WebGPU requires > 0)
+        if (allTriData.empty()) allTriData.push_back(glm::vec4(0.0f));
+        if (allBVHData.empty()) allBVHData.push_back(glm::vec4(0.0f));
+
+        uint64_t triSize = allTriData.size() * sizeof(glm::vec4);
+        uint64_t bvhSize = allBVHData.size() * sizeof(glm::vec4);
+        meshTriBuffer_ = createGpuBufferWithData(device, allTriData.data(), triSize,
+            wgpu::BufferUsage::Storage);
+        meshBVHBuffer_ = createGpuBufferWithData(device, allBVHData.data(), bvhSize,
+            wgpu::BufferUsage::Storage);
+
+        if (numMeshTris_ > 0) {
+            emscripten_log(EM_LOG_CONSOLE,
+                "[GPU Solver] Mesh collision: %d tris, %d BVH nodes", numMeshTris_, numBVHNodes_);
+        }
+    }
+
     // ── Params uniform buffer ──
     {
         paramsBuffer_ = createGpuBuffer(device, sizeof(GpuSimParams),
@@ -293,9 +349,9 @@ void GpuClothSolver::createPipelines(wgpu::Device& device) {
             ComputeShaderSources::applyJacobiCorrections, {bgl});
     }
 
-    // Pass 5: handleCollisions — positions(R), predicted(S), colliders(R), params(U)
+    // Pass 5: handleCollisions — positions(R), predicted(S), colliders(R), params(U), meshTris(R), meshBVH(R)
     {
-        auto bgl = createBGL(device, {{0,'R'},{1,'S'},{2,'R'},{3,'U'}});
+        auto bgl = createBGL(device, {{0,'R'},{1,'S'},{2,'R'},{3,'U'},{4,'R'},{5,'R'}});
         collisionPipeline_ = createComputePipeline(device,
             ComputeShaderSources::handleCollisions, {bgl});
     }
@@ -404,14 +460,18 @@ void GpuClothSolver::createBindGroups(wgpu::Device& device) {
         });
     }
 
-    // Pass 5: handleCollisions — positions(R), predicted(S), colliders(R), params(U)
+    // Pass 5: handleCollisions — positions(R), predicted(S), colliders(R), params(U), meshTris(R), meshBVH(R)
     {
-        auto bgl = createBGL(device, {{0,'R'},{1,'S'},{2,'R'},{3,'U'}});
+        uint64_t triSize = std::max(static_cast<uint64_t>(numMeshTris_ * 4), static_cast<uint64_t>(1)) * sizeof(glm::vec4);
+        uint64_t bvhSize = std::max(static_cast<uint64_t>(numBVHNodes_ * 3), static_cast<uint64_t>(1)) * sizeof(glm::vec4);
+        auto bgl = createBGL(device, {{0,'R'},{1,'S'},{2,'R'},{3,'U'},{4,'R'},{5,'R'}});
         collisionBG_ = createBG(device, bgl, {
             {0, positionsBuffer_, p4},
             {1, predictedBuffer_, p4},
             {2, collidersBuffer_, colSize},
             {3, paramsBuffer_, paramSize},
+            {4, meshTriBuffer_, triSize},
+            {5, meshBVHBuffer_, bvhSize},
         });
     }
 
@@ -532,11 +592,11 @@ void GpuClothSolver::step(wgpu::Device& device, wgpu::Queue& queue,
     params.simConfig2[0] = static_cast<uint32_t>(numSprings_);
     params.simConfig2[1] = static_cast<uint32_t>(numTriangles_);
     params.simConfig2[2] = static_cast<uint32_t>(std::min(static_cast<int>(colliders.size()), 32));
-    params.simConfig2[3] = 0;
+    params.simConfig2[3] = static_cast<uint32_t>(numMeshTris_);
 
     params.groundPlane[0] = 1.2f;    // SOR omega (1.0=standard Jacobi, 1.2~1.5=over-relax)
     params.groundPlane[1] = 1.0f;
-    params.groundPlane[2] = 0.0f;
+    params.groundPlane[2] = static_cast<float>(numBVHNodes_);  // BVH node count for mesh collision
     params.groundPlane[3] = 0.005f;  // ground Y offset
 
     params.compliance[0] = sim.getStretchCompliance();

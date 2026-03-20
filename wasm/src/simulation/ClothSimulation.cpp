@@ -89,7 +89,7 @@ void ClothSimulation::setSolverMode(SolverMode mode) {
 
 SolverContext ClothSimulation::makeSolverContext(double globalTime) {
     return SolverContext{
-        particles_, springs_, colliders_,
+        particles_, springs_, colliders_, meshColliders_,
         gravity_, windForce_,
         damping_, friction_, clothThickness_,
         selfCollisionEnabled_,
@@ -97,6 +97,14 @@ SolverContext ClothSimulation::makeSolverContext(double globalTime) {
         hashCellStart_, hashCellEntries_, hashTableSize_,
         globalTime
     };
+}
+
+void ClothSimulation::addMeshCollider(const MeshData& meshData) {
+    MeshCollider mc;
+    mc.build(meshData);
+    if (mc.isBuilt()) {
+        meshColliders_.push_back(std::move(mc));
+    }
 }
 
 // ─── Sort springs for cache locality ─────────────────────────────────────
@@ -461,6 +469,72 @@ void ClothSimulation::getAABB(glm::vec3& aabbMin, glm::vec3& aabbMax) const {
         aabbMin = glm::min(aabbMin, particles_[i].position);
         aabbMax = glm::max(aabbMax, particles_[i].position);
     }
+}
+
+// ─── Measurement API ─────────────────────────────────────────────────────
+
+float ClothSimulation::getMaxVelocity() const {
+    float maxV = 0.0f;
+    for (const auto& p : particles_) {
+        if (p.pinned) continue;
+        float v = glm::length(p.velocity);
+        if (v > maxV) maxV = v;
+    }
+    return maxV;
+}
+
+float ClothSimulation::getAvgVelocity() const {
+    float sum = 0.0f;
+    int count = 0;
+    for (const auto& p : particles_) {
+        if (p.pinned) continue;
+        sum += glm::length(p.velocity);
+        count++;
+    }
+    return count > 0 ? sum / count : 0.0f;
+}
+
+float ClothSimulation::getKineticEnergy() const {
+    float energy = 0.0f;
+    for (const auto& p : particles_) {
+        if (p.pinned || p.invMass == 0.0f) continue;
+        float mass = 1.0f / p.invMass;
+        energy += 0.5f * mass * glm::dot(p.velocity, p.velocity);
+    }
+    return energy;
+}
+
+bool ClothSimulation::isSettled(float threshold) const {
+    return getMaxVelocity() < threshold;
+}
+
+float ClothSimulation::getLowestY() const {
+    if (particles_.empty()) return 0.0f;
+    float minY = particles_[0].position.y;
+    for (size_t i = 1; i < particles_.size(); i++) {
+        if (particles_[i].position.y < minY) minY = particles_[i].position.y;
+    }
+    return minY;
+}
+
+float ClothSimulation::getAvgStretchRatio() const {
+    if (springs_.empty()) return 0.0f;
+    float sum = 0.0f;
+    for (const auto& s : springs_) {
+        float len = glm::length(particles_[s.particleA].position - particles_[s.particleB].position);
+        sum += std::abs(len / s.restLength - 1.0f);
+    }
+    return sum / springs_.size();
+}
+
+float ClothSimulation::getMaxStretchRatio() const {
+    float maxR = 0.0f;
+    for (const auto& s : springs_) {
+        float len = glm::length(particles_[s.particleA].position - particles_[s.particleB].position);
+        float ratio = std::abs(len / s.restLength - 1.0f);
+        if (ratio > maxR) maxR = ratio;
+    }
+    return maxR;
 }
 
 void ClothSimulation::reset() {

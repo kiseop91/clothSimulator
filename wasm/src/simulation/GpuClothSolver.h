@@ -73,7 +73,11 @@ private:
     wgpu::Buffer indexBuffer_;           // u32 (Storage | Index)
     wgpu::Buffer vertexOutputBuffer_;    // f32 × 8 per particle (Storage | Vertex)
     wgpu::Buffer collidersBuffer_;       // vec4f × 32
+    wgpu::Buffer meshTriBuffer_;         // vec4f × (numMeshTris * 4): v0,v1,v2,normal
+    wgpu::Buffer meshBVHBuffer_;         // vec4f × (numBVHNodes * 3): aabbMin+left, aabbMax+right, triRange
     wgpu::Buffer paramsBuffer_;          // Uniform
+    int numMeshTris_ = 0;
+    int numBVHNodes_ = 0;
 
     // ─── Compute Pipelines ───────────────────────────────────────
     wgpu::ComputePipeline applyForcesPipeline_;
@@ -103,8 +107,8 @@ private:
         float gravity[4];       // gx, gy, gz, dt
         float wind[4];          // wx, wy, wz, globalTime
         float simConfig[4];     // damping, friction, clothThickness, numParticles_f32
-        uint32_t simConfig2[4]; // numSprings, numTriangles, numColliders, 0
-        float groundPlane[4];   // nx, ny, nz, offset
+        uint32_t simConfig2[4]; // numSprings, numTriangles, numSphereColliders, numMeshTris
+        float groundPlane[4];   // omega, 1.0, numBVHNodes(float), groundY
         float compliance[4];    // stretch, shear, bend, 0
     };
 

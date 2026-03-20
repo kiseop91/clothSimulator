@@ -225,7 +225,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 )wgsl";
 
-// ─── Pass 5: Handle Collisions (CCD + Ground Plane) ──────────────────
+// ─── Pass 5: Handle Collisions (CCD + Mesh BVH + Ground Plane) ───────
 static const char* handleCollisions = R"wgsl(
 struct SimParams {
     gravity: vec4f,
@@ -240,6 +240,46 @@ struct SimParams {
 @group(0) @binding(1) var<storage, read_write> predicted: array<vec4f>;
 @group(0) @binding(2) var<storage, read> colliders: array<vec4f>;
 @group(0) @binding(3) var<uniform> params: SimParams;
+@group(0) @binding(4) var<storage, read> meshTris: array<vec4f>;
+@group(0) @binding(5) var<storage, read> meshBVH: array<vec4f>;
+
+// Closest point on triangle (Ericson algorithm)
+fn closestPtOnTri(p: vec3f, a: vec3f, b: vec3f, c: vec3f) -> vec3f {
+    let ab = b - a; let ac = c - a; let ap = p - a;
+    let d1 = dot(ab, ap); let d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) { return a; }
+
+    let bp = p - b;
+    let d3 = dot(ab, bp); let d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) { return b; }
+
+    let vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        let v = d1 / (d1 - d3);
+        return a + v * ab;
+    }
+
+    let cp2 = p - c;
+    let d5 = dot(ab, cp2); let d6 = dot(ac, cp2);
+    if (d6 >= 0.0 && d5 <= d6) { return c; }
+
+    let vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        let w = d2 / (d2 - d6);
+        return a + w * ac;
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + w * (c - b);
+    }
+
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    return a + ab * v + ac * w;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -254,23 +294,22 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var pred = predicted[idx].xyz;
     let friction = params.simConfig.y;
     let clothThickness = params.simConfig.z;
-    let numColliders = params.simConfig2.z;
+    let numSphereColliders = params.simConfig2.z;
 
     let movement = pred - pos;
 
-    for (var c = 0u; c < numColliders; c++) {
+    // ── Sphere collisions (existing) ──
+    for (var c = 0u; c < numSphereColliders; c++) {
         let collider = colliders[c];
         let center = collider.xyz;
         let radius = collider.w;
         let paddedRadius = radius + clothThickness;
 
-        // Ray-sphere CCD
         let oc = pos - center;
         let a = dot(movement, movement);
         let b = 2.0 * dot(oc, movement);
         let cCoeff = dot(oc, oc) - paddedRadius * paddedRadius;
 
-        // Already inside: push out
         if (cCoeff < 0.0) {
             let dist = length(oc);
             if (dist > 1e-7) {
@@ -293,13 +332,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let normal = normalize(hitPos - center);
             let surfacePos = center + normal * (paddedRadius + 0.001);
 
-            // Friction
             let remainingVel = pred - hitPos;
             let vn = normal * dot(remainingVel, normal);
             let vt = remainingVel - vn;
             pred = surfacePos + vt * (1.0 - friction);
 
-            // Ensure outside
             let toP = pred - center;
             let toPLen = length(toP);
             if (toPLen < paddedRadius) {
@@ -308,7 +345,86 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         }
     }
 
-    // Ground plane collision
+    // ── Mesh BVH triangle collisions ──
+    let numBVHNodes = i32(params.groundPlane.z);
+    if (numBVHNodes > 0) {
+        var bestDistSq = clothThickness * clothThickness;
+        var bestNormal = vec3f(0.0, 1.0, 0.0);
+        var bestCorrection = vec3f(0.0);
+        var found = false;
+
+        // Iterative BVH traversal
+        var stack: array<i32, 32>;
+        var stackPtr = 0;
+        stack[0] = 0;
+        stackPtr = 1;
+
+        while (stackPtr > 0) {
+            stackPtr--;
+            let nodeIdx = stack[stackPtr];
+            let n0 = meshBVH[nodeIdx * 3 + 0];
+            let n1 = meshBVH[nodeIdx * 3 + 1];
+            let n2 = meshBVH[nodeIdx * 3 + 2];
+
+            let aabbMin = n0.xyz;
+            let aabbMax = n1.xyz;
+
+            // AABB test with padding
+            if (pred.x < aabbMin.x - clothThickness || pred.x > aabbMax.x + clothThickness ||
+                pred.y < aabbMin.y - clothThickness || pred.y > aabbMax.y + clothThickness ||
+                pred.z < aabbMin.z - clothThickness || pred.z > aabbMax.z + clothThickness) {
+                continue;
+            }
+
+            let left = i32(n0.w);
+            let right = i32(n1.w);
+            let triStart = i32(n2.x);
+            let triCount = i32(n2.y);
+
+            if (triCount > 0) {
+                // Leaf: test triangles
+                for (var t = 0; t < triCount; t++) {
+                    let ti = (triStart + t) * 4;
+                    let tv0 = meshTris[ti + 0].xyz;
+                    let tv1 = meshTris[ti + 1].xyz;
+                    let tv2 = meshTris[ti + 2].xyz;
+                    let tn  = meshTris[ti + 3].xyz;
+
+                    let closest = closestPtOnTri(pred, tv0, tv1, tv2);
+                    let diff = pred - closest;
+                    let distSq = dot(diff, diff);
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        bestNormal = tn;
+                        let dist = sqrt(distSq);
+                        if (dist < 1e-7) {
+                            bestCorrection = tn * clothThickness;
+                        } else {
+                            var dir = diff / dist;
+                            if (dot(dir, tn) < 0.0) { dir = -dir; }
+                            bestCorrection = dir * (clothThickness - dist + 0.001);
+                        }
+                        found = true;
+                    }
+                }
+            } else {
+                // Internal: push children
+                if (left >= 0 && stackPtr < 31) { stack[stackPtr] = left; stackPtr++; }
+                if (right >= 0 && stackPtr < 31) { stack[stackPtr] = right; stackPtr++; }
+            }
+        }
+
+        if (found) {
+            pred += bestCorrection;
+            // Friction
+            let vel = pred - pos;
+            let vnComp = dot(vel, bestNormal);
+            let vTangent = vel - bestNormal * vnComp;
+            pred = pos + vTangent * (1.0 - friction) + bestCorrection;
+        }
+    }
+
+    // ── Ground plane collision ──
     let groundY = params.groundPlane.w;
     if (pred.y < groundY) {
         let vel = pred - pos;

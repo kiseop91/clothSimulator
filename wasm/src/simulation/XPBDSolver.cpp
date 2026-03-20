@@ -2,6 +2,7 @@
 #include "simulation/ClothParticle.h"
 #include "simulation/ClothSpring.h"
 #include "simulation/CollisionBody.h"
+#include "simulation/MeshCollider.h"
 #include <cmath>
 #include <algorithm>
 
@@ -25,6 +26,10 @@ void XPBDSolver::updateSpringCompliance(SolverContext& ctx) {
 }
 
 void XPBDSolver::step(SolverContext& ctx, float dt) {
+    if (complianceDirty_) {
+        updateSpringCompliance(ctx);
+        complianceDirty_ = false;
+    }
     float subDt = dt / static_cast<float>(numSubsteps_);
 
     for (int s = 0; s < numSubsteps_; s++) {
@@ -34,7 +39,10 @@ void XPBDSolver::step(SolverContext& ctx, float dt) {
         // Reset Lagrange multipliers each substep
         for (auto& spring : ctx.springs) spring.lambda = 0.0f;
 
-        solveXPBDConstraints(ctx, subDt);
+        // Multiple Jacobi iterations per substep for better convergence
+        for (int iter = 0; iter < constraintIters_; iter++) {
+            solveXPBDConstraints(ctx, subDt);
+        }
         handleCollisionsCCD(ctx);
         if (ctx.selfCollisionEnabled) {
             handleSelfCollision(ctx);
@@ -153,13 +161,27 @@ void XPBDSolver::handleCollisionsCCD(SolverContext& ctx) {
                 glm::vec3 vn = normal * glm::dot(remainingVel, normal);
                 glm::vec3 vt = remainingVel - vn;
 
-                p.predictedPosition = surfacePos + vt * (1.0f - ctx.friction);
+                // Dampen tangential velocity on collision to reduce bouncing
+                p.predictedPosition = surfacePos + vt * (1.0f - ctx.friction) * 0.5f;
 
                 glm::vec3 toP = p.predictedPosition - collider.center;
                 float toPLen = glm::length(toP);
                 if (toPLen < paddedRadius) {
                     p.predictedPosition = collider.center + (toP / glm::max(toPLen, 1e-7f)) * (paddedRadius + 0.001f);
                 }
+            }
+        }
+
+        // Mesh triangle collisions
+        for (const auto& meshCol : ctx.meshColliders) {
+            glm::vec3 correction, triNormal;
+            if (meshCol.pointCollision(p.predictedPosition, ctx.clothThickness, correction, triNormal)) {
+                p.predictedPosition += correction;
+                // Apply friction along surface
+                glm::vec3 vel = p.predictedPosition - p.position;
+                float vn = glm::dot(vel, triNormal);
+                glm::vec3 vTangent = vel - triNormal * vn;
+                p.predictedPosition = p.position + vTangent * (1.0f - ctx.friction) + correction;
             }
         }
 
