@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { useRenderer } from "../context/RendererContext.tsx";
-import { Loader, AlertTriangle, ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, Grid3x3, Box, ArrowUp, Eye, Crosshair } from "lucide-react";
+import { Loader, AlertTriangle, ZoomIn, ZoomOut, RotateCw, Maximize2, Minimize2, Grid3x3, Box, ArrowUp, Eye, Crosshair, Pencil } from "lucide-react";
 
 export default function ModelViewer() {
   const { module, wasmLoading, wasmError, bridge } = useRenderer();
@@ -21,6 +21,12 @@ export default function ModelViewer() {
   const [fps, setFps] = useState(0);
   const [frameTime, setFrameTime] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+
+  // Drawing mode state
+  const [drawingMode, setDrawingMode] = useState(false);
+  const [drawPoints, setDrawPoints] = useState<{x: number, y: number}[]>([]);
+  const [mousePos, setMousePos] = useState<{x: number, y: number} | null>(null);
+  const [drawMaxArea, setDrawMaxArea] = useState(0.005);
 
   // Init renderer
   useEffect(() => {
@@ -121,8 +127,51 @@ export default function ModelViewer() {
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
 
+  // --- Drawing mode handlers ---
+  const finishDrawing = useCallback(() => {
+    if (!module || drawPoints.length < 3 || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    // Normalize points to 0..1 range
+    const flat = new Float32Array(drawPoints.length * 2);
+    for (let i = 0; i < drawPoints.length; i++) {
+      flat[i * 2] = (drawPoints[i].x - rect.left) / rect.width;
+      flat[i * 2 + 1] = (drawPoints[i].y - rect.top) / rect.height;
+    }
+    bridge.addClothFromPolygon(flat, drawPoints.length, drawMaxArea, 25.0, 0);
+    setDrawingMode(false);
+    setDrawPoints([]);
+    setMousePos(null);
+  }, [module, drawPoints, drawMaxArea, bridge]);
+
+  const handleDrawingClick = useCallback((e: React.PointerEvent) => {
+    if (!drawingMode || e.button !== 0) return;
+    const pt = { x: e.clientX, y: e.clientY };
+
+    // Check if clicking near start point to close polygon
+    if (drawPoints.length >= 3) {
+      const dx = pt.x - drawPoints[0].x;
+      const dy = pt.y - drawPoints[0].y;
+      if (Math.sqrt(dx * dx + dy * dy) < 15) {
+        finishDrawing();
+        return;
+      }
+    }
+
+    setDrawPoints(prev => [...prev, pt]);
+  }, [drawingMode, drawPoints, finishDrawing]);
+
+  const handleDrawingMove = useCallback((e: React.PointerEvent) => {
+    if (!drawingMode) return;
+    setMousePos({ x: e.clientX, y: e.clientY });
+  }, [drawingMode]);
+
   // --- Pointer handlers ---
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (drawingMode) {
+      handleDrawingClick(e);
+      e.preventDefault();
+      return;
+    }
     isDraggingRef.current = true;
     isDraggingLightRef.current = false;
     isGrabbingParticleRef.current = false;
@@ -151,10 +200,11 @@ export default function ModelViewer() {
 
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     e.preventDefault();
-  }, [module, bridge.simulation.running]);
+  }, [module, bridge.simulation.running, drawingMode, handleDrawingClick]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (drawingMode) { handleDrawingMove(e); return; }
       if (!isDraggingRef.current || !module) return;
       const dx = e.clientX - lastPosRef.current.x;
       const dy = e.clientY - lastPosRef.current.y;
@@ -182,7 +232,7 @@ export default function ModelViewer() {
         module.cameraPan(dx * 0.01, dy * 0.01);
       }
     },
-    [module, bridge]
+    [module, bridge, drawingMode, handleDrawingMove]
   );
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -234,10 +284,10 @@ export default function ModelViewer() {
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
-      if (!module) return;
+      if (drawingMode || !module) return;
       module.cameraZoom(e.deltaY * 0.01);
     },
-    [module]
+    [module, drawingMode]
   );
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -415,6 +465,104 @@ export default function ModelViewer() {
             {fps} FPS
           </span>
           <span className="text-gray-500 ml-1.5">{frameTime.toFixed(1)}ms</span>
+        </div>
+      )}
+
+      {/* Draw Cloth button */}
+      <div className="absolute top-2 right-36 flex gap-1">
+        <button
+          onClick={() => { setDrawingMode(!drawingMode); setDrawPoints([]); setMousePos(null); }}
+          className={`flex items-center gap-1 px-2 h-6 rounded text-[10px] font-bold backdrop-blur-sm border border-gray-600/30 transition-colors cursor-pointer ${
+            drawingMode ? 'bg-cyan-600 text-white' : 'bg-gray-800/70 hover:bg-gray-700/80 text-gray-400 hover:text-white'
+          }`}
+          title="Draw custom cloth polygon"
+        >
+          <Pencil className="w-3 h-3" />
+          {drawingMode ? "Cancel" : "Draw Cloth"}
+        </button>
+      </div>
+
+      {/* Drawing mode SVG overlay */}
+      {drawingMode && canvasRef.current && (
+        <svg
+          className="absolute inset-0 w-full h-full z-10"
+          style={{ cursor: 'crosshair', pointerEvents: 'none' }}
+        >
+          {/* Lines connecting points */}
+          {drawPoints.length > 1 && (
+            <polyline
+              points={drawPoints.map(p => {
+                const rect = containerRef.current!.getBoundingClientRect();
+                return `${p.x - rect.left},${p.y - rect.top}`;
+              }).join(' ')}
+              fill="none"
+              stroke="cyan"
+              strokeWidth="2"
+              strokeDasharray="6 3"
+            />
+          )}
+          {/* Line from last point to mouse */}
+          {drawPoints.length > 0 && mousePos && (() => {
+            const rect = containerRef.current!.getBoundingClientRect();
+            const last = drawPoints[drawPoints.length - 1];
+            return (
+              <line
+                x1={last.x - rect.left} y1={last.y - rect.top}
+                x2={mousePos.x - rect.left} y2={mousePos.y - rect.top}
+                stroke="cyan" strokeWidth="1" strokeDasharray="4 4" opacity="0.6"
+              />
+            );
+          })()}
+          {/* Preview line from mouse to start point */}
+          {drawPoints.length >= 2 && mousePos && (() => {
+            const rect = containerRef.current!.getBoundingClientRect();
+            const first = drawPoints[0];
+            return (
+              <line
+                x1={mousePos.x - rect.left} y1={mousePos.y - rect.top}
+                x2={first.x - rect.left} y2={first.y - rect.top}
+                stroke="lime" strokeWidth="1" strokeDasharray="4 4" opacity="0.3"
+              />
+            );
+          })()}
+          {/* Points */}
+          {drawPoints.map((p, i) => {
+            const rect = containerRef.current!.getBoundingClientRect();
+            const cx = p.x - rect.left;
+            const cy = p.y - rect.top;
+            return (
+              <circle
+                key={i}
+                cx={cx} cy={cy}
+                r={i === 0 ? 6 : 3}
+                fill={i === 0 ? "lime" : "cyan"}
+                stroke="white" strokeWidth="1"
+                opacity="0.9"
+              />
+            );
+          })}
+          {/* Instruction text */}
+          <text x="50%" y="30" textAnchor="middle" fill="white" fontSize="12" opacity="0.7">
+            {drawPoints.length === 0 ? "Click to place points. Close polygon by clicking the green start point."
+             : drawPoints.length < 3 ? `${drawPoints.length} point(s) — need at least 3`
+             : `${drawPoints.length} points — click green dot to finish`}
+          </text>
+        </svg>
+      )}
+
+      {/* Drawing mode resolution slider */}
+      {drawingMode && (
+        <div className="absolute top-10 right-36 bg-gray-900/80 backdrop-blur-sm rounded px-2 py-1 z-10 text-[10px] text-gray-300">
+          <label className="flex items-center gap-2">
+            <span>Resolution:</span>
+            <input
+              type="range" min="0.001" max="0.05" step="0.001"
+              value={drawMaxArea}
+              onChange={e => setDrawMaxArea(parseFloat(e.target.value))}
+              className="w-20 h-1"
+            />
+            <span className="text-cyan-400 w-10">{drawMaxArea.toFixed(3)}</span>
+          </label>
         </div>
       )}
 

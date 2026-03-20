@@ -9,6 +9,7 @@
 #include "renderer/Renderer.h"
 #include "loaders/ModelLoader.h"
 #include "mesh/Mesh.h"
+#include "mesh/TriangleMeshGenerator.h"
 
 // Global renderer instance
 static Renderer g_rendererInstance;
@@ -487,6 +488,29 @@ int getDrawCallCount() { return g_rendererInstance.getDrawCallCount(); }
 float getFrameTimeMs() { return g_rendererInstance.getFrameTimeMs(); }
 int getGpuErrorCount() { return g_rendererInstance.getGpuErrorCount(); }
 
+// Custom polygon cloth
+void addClothFromPolygon(const emscripten::val& jsPoints, int numPoints,
+                          float maxArea, float minAngle, int pinMode) {
+    auto points = emscripten::vecFromJSArray<float>(jsPoints);
+    if (static_cast<int>(points.size()) < numPoints * 2 || numPoints < 3) {
+        emscripten_log(EM_LOG_ERROR, "addClothFromPolygon: invalid input (%d points)", numPoints);
+        return;
+    }
+
+    std::vector<glm::vec2> polygon(numPoints);
+    for (int i = 0; i < numPoints; i++) {
+        polygon[i] = glm::vec2(points[i * 2], points[i * 2 + 1]);
+    }
+
+    MeshData mesh = TriangleMeshGenerator::generate(polygon, minAngle, maxArea);
+    if (mesh.vertices.empty()) {
+        emscripten_log(EM_LOG_ERROR, "addClothFromPolygon: triangulation failed");
+        return;
+    }
+
+    g_rendererInstance.addClothFromMeshData(mesh, pinMode);
+}
+
 // ─── Embind Bindings ─────────────────────────────────────────────────
 
 EMSCRIPTEN_BINDINGS(renderer_module) {
@@ -541,6 +565,9 @@ EMSCRIPTEN_BINDINGS(renderer_module) {
 
     // Horizontal cloth
     emscripten::function("addClothMeshHorizontal", &addClothMeshHorizontal);
+
+    // Custom polygon cloth
+    emscripten::function("addClothFromPolygon", &addClothFromPolygon);
 
     // Mesh to cloth conversion
     emscripten::function("convertMeshToCloth", &convertMeshToCloth);

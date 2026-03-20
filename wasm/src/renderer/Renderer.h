@@ -65,6 +65,7 @@ public:
     // Cloth simulation
     void addClothMesh(float width, float height, int resX, int resY);
     void addClothMeshHorizontal(float width, float depth, int resX, int resZ, float dropHeight);
+    void addClothFromMeshData(const MeshData& meshData, int pinMode);
     void toggleSimulation(bool running);
     void resetCloth();
     void setGravity(float x, float y, float z) { clothSim_.setGravity(x, y, z); }

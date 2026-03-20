@@ -985,6 +985,20 @@ void Renderer::addClothMeshHorizontal(float width, float depth, int resX, int re
     emscripten_log(EM_LOG_CONSOLE, "Horizontal cloth: %dx%d at h=%.1f", resX, resZ, dropHeight);
 }
 
+void Renderer::addClothFromMeshData(const MeshData& meshData, int pinMode) {
+    if (clothMesh_) { clothMesh_->cleanup(); delete clothMesh_; clothMesh_ = nullptr; }
+    gpuSolver_.destroy();
+    clothSim_.initFromMesh(meshData, pinMode);
+    syncCollidersToSim();
+    const MeshData& initial = clothSim_.generateMeshData();
+    clothMesh_ = new Mesh();
+    clothMesh_->initDynamic(device_, initial);
+    clothMesh_->setName("cloth_custom");
+    gpuSolver_.init(device_, queue_, clothSim_);
+    emscripten_log(EM_LOG_CONSOLE, "Custom cloth created: %zu verts, %zu tris, pin=%d",
+                   meshData.vertices.size(), meshData.indices.size() / 3, pinMode);
+}
+
 void Renderer::toggleSimulation(bool running) { clothSim_.setRunning(running); }
 
 void Renderer::resetCloth() {

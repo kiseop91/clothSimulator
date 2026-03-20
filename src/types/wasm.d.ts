@@ -49,6 +49,7 @@ export interface WasmModule {
   setShowCollisionSpheres(show: boolean): void;
   getShowCollisionSpheres(): boolean;
   convertMeshToCloth(meshIndex: number, pinMode: number): void;
+  addClothFromPolygon(points: Float32Array, numPoints: number, maxArea: number, minAngle: number, pinMode: number): void;
   getLoadedMeshCount(): number;
   getLoadedMeshName(index: number): string;
 
@@ -97,6 +98,9 @@ export interface WasmModule {
   getCollisionSphereX(index: number): number;
   getCollisionSphereY(index: number): number;
   getCollisionSphereZ(index: number): number;
+
+  // GPU diagnostics
+  getFrameTimeMs(): number;
 }
 
 export type WasmFactory = (config?: object) => Promise<WasmModule>;

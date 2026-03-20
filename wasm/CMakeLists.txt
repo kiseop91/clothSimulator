@@ -9,6 +9,7 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 list(APPEND SOURCES
     "third_party/openfbx/ofbx.cpp"
     "third_party/openfbx/libdeflate.cpp"
+    "third_party/triangle/triangle.cpp"
 )
 
 add_executable(renderer ${SOURCES})
@@ -19,6 +20,12 @@ target_include_directories(renderer PRIVATE
     third_party/tinygltf
     third_party/openfbx
     third_party/glm
+    third_party/triangle
+)
+
+# Triangle library must be compiled with TRILIBRARY to expose the API
+set_source_files_properties("third_party/triangle/triangle.cpp" PROPERTIES
+    COMPILE_DEFINITIONS "TRILIBRARY;ANSI_DECLARATORS;REAL=double"
 )
 
 # Note: TINYOBJLOADER_IMPLEMENTATION, TINYGLTF_IMPLEMENTATION, STB_IMAGE_IMPLEMENTATION,
@@ -54,6 +61,8 @@ list(APPEND SIM_TEST_SOURCES
     "test/sim_test.cpp"
     "third_party/openfbx/ofbx.cpp"
     "third_party/openfbx/libdeflate.cpp"
+    "third_party/triangle/triangle.cpp"
+    "src/mesh/TriangleMeshGenerator.cpp"
 )
 # Remove GPU solver (requires WebGPU)
 list(FILTER SIM_TEST_SOURCES EXCLUDE REGEX "GpuClothSolver")
@@ -65,6 +74,7 @@ target_include_directories(sim_test PRIVATE
     third_party/tinygltf
     third_party/openfbx
     third_party/glm
+    third_party/triangle
 )
 target_compile_options(sim_test PRIVATE -sUSE_ZLIB=1)
 set_target_properties(sim_test PROPERTIES

@@ -1,6 +1,7 @@
 #include "simulation/ClothSimulation.h"
 #include "simulation/CollisionBody.h"
 #include "loaders/ModelLoader.h"
+#include "mesh/TriangleMeshGenerator.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -505,6 +506,132 @@ void test_drop_mesh(const char* filepath) {
     g_results.push_back(r);
 }
 
+// ─── Custom Mesh Tests (Triangle library) ────────────────────────────────
+
+void test_custom_rectangle() {
+    std::vector<glm::vec2> polygon = {{0,0}, {1,0}, {1,1}, {0,1}};
+    MeshData md = TriangleMeshGenerator::generate(polygon, 25.0f, 0.005f, 2.0f, 2.0f);
+
+    printf("{\"scenario\":\"custom_rectangle\",\"vertices\":%zu,\"triangles\":%zu}\n",
+           md.vertices.size(), md.indices.size() / 3);
+
+    TestResult r;
+    r.name = "custom_rectangle";
+    r.totalFrames = 300;
+
+    if (md.vertices.size() < 50) {
+        r.passed = false;
+        r.failReason = "TOO_FEW_VERTICES";
+        r.settleFrame = -1;
+        r.finalMaxVel = r.finalAvgStretch = r.finalMaxStretch = r.finalLowestY = r.finalEnergy = 0;
+        g_results.push_back(r);
+        return;
+    }
+
+    ClothSimulation sim;
+    sim.initFromMesh(md, 0);
+    sim.setRunning(true);
+    int sf = runSim(sim, 300, "custom_rectangle");
+
+    r.settleFrame = sf;
+    r.finalMaxVel = sim.getMaxVelocity();
+    r.finalAvgStretch = sim.getAvgStretchRatio();
+    r.finalMaxStretch = sim.getMaxStretchRatio();
+    r.finalLowestY = sim.getLowestY();
+    r.finalEnergy = sim.getKineticEnergy();
+    r.passed = (sf != -2) && (md.vertices.size() > 50);
+    if (sf == -2) r.failReason = "EXPLODED";
+    g_results.push_back(r);
+}
+
+void test_custom_circle() {
+    // 32-gon approximating a circle
+    std::vector<glm::vec2> polygon;
+    const int N = 32;
+    for (int i = 0; i < N; i++) {
+        float angle = 2.0f * 3.14159265f * i / N;
+        polygon.push_back({0.5f + 0.5f * cosf(angle), 0.5f + 0.5f * sinf(angle)});
+    }
+    MeshData md = TriangleMeshGenerator::generate(polygon, 25.0f, 0.005f, 2.0f, 2.0f);
+
+    printf("{\"scenario\":\"custom_circle\",\"vertices\":%zu,\"triangles\":%zu}\n",
+           md.vertices.size(), md.indices.size() / 3);
+
+    ClothSimulation sim;
+    sim.initFromMesh(md, 0);
+    sim.setRunning(true);
+    int sf = runSim(sim, 300, "custom_circle");
+
+    TestResult r;
+    r.name = "custom_circle";
+    r.totalFrames = 300;
+    r.settleFrame = sf;
+    r.finalMaxVel = sim.getMaxVelocity();
+    r.finalAvgStretch = sim.getAvgStretchRatio();
+    r.finalMaxStretch = sim.getMaxStretchRatio();
+    r.finalLowestY = sim.getLowestY();
+    r.finalEnergy = sim.getKineticEnergy();
+    r.passed = (sf != -2);
+    if (sf == -2) r.failReason = "EXPLODED";
+    g_results.push_back(r);
+}
+
+void test_custom_L_shape() {
+    // L-shaped non-convex polygon
+    std::vector<glm::vec2> polygon = {
+        {0,0}, {0.5f,0}, {0.5f,0.5f}, {1,0.5f}, {1,1}, {0,1}
+    };
+    MeshData md = TriangleMeshGenerator::generate(polygon, 25.0f, 0.005f, 2.0f, 2.0f);
+
+    printf("{\"scenario\":\"custom_L_shape\",\"vertices\":%zu,\"triangles\":%zu}\n",
+           md.vertices.size(), md.indices.size() / 3);
+
+    ClothSimulation sim;
+    sim.initFromMesh(md, 0);
+    sim.setRunning(true);
+    int sf = runSim(sim, 300, "custom_L_shape");
+
+    TestResult r;
+    r.name = "custom_L_shape";
+    r.totalFrames = 300;
+    r.settleFrame = sf;
+    r.finalMaxVel = sim.getMaxVelocity();
+    r.finalAvgStretch = sim.getAvgStretchRatio();
+    r.finalMaxStretch = sim.getMaxStretchRatio();
+    r.finalLowestY = sim.getLowestY();
+    r.finalEnergy = sim.getKineticEnergy();
+    r.passed = (sf != -2) && (md.vertices.size() > 30);
+    if (sf == -2) r.failReason = "EXPLODED";
+    else if (md.vertices.size() <= 30) r.failReason = "TOO_FEW_VERTICES";
+    g_results.push_back(r);
+}
+
+void test_triangle_resolution() {
+    std::vector<glm::vec2> polygon = {{0,0}, {1,0}, {1,1}, {0,1}};
+    float areas[] = {0.1f, 0.01f, 0.005f, 0.001f};
+    size_t prevVerts = 0;
+    bool increasing = true;
+
+    for (float a : areas) {
+        MeshData md = TriangleMeshGenerator::generate(polygon, 25.0f, a, 2.0f, 2.0f);
+        printf("{\"scenario\":\"resolution\",\"maxArea\":%.4f,\"vertices\":%zu,\"triangles\":%zu}\n",
+               a, md.vertices.size(), md.indices.size() / 3);
+        if (prevVerts > 0 && md.vertices.size() <= prevVerts) {
+            increasing = false;
+        }
+        prevVerts = md.vertices.size();
+    }
+
+    TestResult r;
+    r.name = "triangle_resolution";
+    r.totalFrames = 0;
+    r.settleFrame = 0;
+    r.finalMaxVel = r.finalAvgStretch = r.finalMaxStretch = r.finalLowestY = r.finalEnergy = 0;
+    r.passed = increasing;
+    if (!increasing) r.failReason = "RESOLUTION_NOT_INCREASING";
+    g_results.push_back(r);
+}
+
 // ─── Summary Report ──────────────────────────────────────────────────────
 
 void printSummary() {
@@ -550,6 +677,12 @@ int main(int argc, char** argv) {
         test_hanging_xpbd_tuned();
         test_constraint_iter_sweep();
         test_drop_sphere_xpbd();
+    }
+    if (strcmp(scenario, "all") == 0 || strcmp(scenario, "custom") == 0) {
+        test_custom_rectangle();
+        test_custom_circle();
+        test_custom_L_shape();
+        test_triangle_resolution();
     }
     if (strcmp(scenario, "drop_mesh") == 0 && meshPath) {
         test_drop_mesh(meshPath);

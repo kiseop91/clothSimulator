@@ -100,6 +100,7 @@ export interface RendererBridge {
   setConstraintIterations: (value: number) => void;
   setShowCollisionSpheres: (show: boolean) => void;
   selectCloth: () => void;
+  addClothFromPolygon: (points: Float32Array, numPoints: number, maxArea: number, minAngle: number, pinMode: number) => void;
   convertMeshToCloth: (meshIndex: number, pinMode: number) => void;
   getLoadedMeshCount: () => number;
   getLoadedMeshName: (index: number) => string;
@@ -277,6 +278,14 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
   const addClothMeshHorizontal = useCallback(
     (width: number, depth: number, resX: number, resZ: number, dropHeight: number) => {
       moduleRef.current?.addClothMeshHorizontal(width, depth, resX, resZ, dropHeight);
+      setSimulation((prev) => ({ ...prev, clothAdded: true, running: false }));
+    },
+    []
+  );
+
+  const addClothFromPolygon = useCallback(
+    (points: Float32Array, numPoints: number, maxArea: number, minAngle: number, pinMode: number) => {
+      moduleRef.current?.addClothFromPolygon(points, numPoints, maxArea, minAngle, pinMode);
       setSimulation((prev) => ({ ...prev, clothAdded: true, running: false }));
     },
     []
@@ -604,6 +613,7 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     refreshMeshInfo,
     addClothMesh,
     addClothMeshHorizontal,
+    addClothFromPolygon,
     toggleSimulation,
     resetCloth,
     setGravity,
