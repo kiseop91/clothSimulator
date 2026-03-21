@@ -98,6 +98,16 @@ export default function DrillPropertiesPanel({ state, actions, bridge }: DrillPr
                 {state.drill.keyframes.find(kf => kf.objectId === selectedObj.id)?.waypoints.length ?? 0}
               </span>
             </div>
+            {state.drill.keyframes.some(kf => kf.objectId === selectedObj.id && kf.waypoints.length > 2) && (
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={state.drill.keyframes.find(kf => kf.objectId === selectedObj.id)?.smooth ?? false}
+                  onChange={(e) => actions.updateKeyframeSmooth(selectedObj.id, e.target.checked)}
+                />
+                Smooth Movement
+              </label>
+            )}
             <div>
               <span className="text-gray-300 block mb-1">Color</span>
               <div className="flex gap-1">
@@ -142,6 +152,14 @@ export default function DrillPropertiesPanel({ state, actions, bridge }: DrillPr
               <span>Waypoints</span>
               <span className="text-white">{selectedPath.waypoints.length}</span>
             </div>
+            <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedPath.smooth ?? false}
+                onChange={(e) => actions.updatePathSmooth(selectedPath.id, e.target.checked)}
+              />
+              Smooth Curve
+            </label>
             <button
               onClick={() => actions.removePath(selectedPath.id)}
               className="w-full py-1.5 bg-red-700/50 hover:bg-red-700 text-red-200 rounded text-xs cursor-pointer"

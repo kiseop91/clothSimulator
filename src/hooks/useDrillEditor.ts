@@ -19,6 +19,9 @@ export interface DrillEditorState {
   playbackSpeed: number;
   isLooping: boolean;
   lastKeyframeHint: { objectId: string; time: number } | null;
+  isRecording: boolean;
+  recordingObjectId: string | null;
+  recordedPoints: Array<{ x: number; z: number }> | null;
 }
 
 export interface DrillEditorActions {
@@ -55,6 +58,12 @@ export interface DrillEditorActions {
   setLooping: (loop: boolean) => void;
   stepForward: () => void;
   stepBackward: () => void;
+  updatePathSmooth: (id: string, smooth: boolean) => void;
+  updateKeyframeSmooth: (objectId: string, smooth: boolean) => void;
+  startRecording: () => void;
+  addRecordingPoint: (x: number, z: number) => void;
+  finishRecording: () => void;
+  cancelRecording: () => void;
 }
 
 function getTokenTypeForTool(tool: ToolMode): TokenType | null {
@@ -78,6 +87,55 @@ function getPathStyleForTool(tool: ToolMode): PathStyle | null {
   }
 }
 
+// Ramer-Douglas-Peucker path simplification
+function simplifyPath(points: { x: number; z: number }[], epsilon: number): { x: number; z: number }[] {
+  if (points.length <= 2) return points;
+
+  // Find point with max distance from line between first and last
+  let maxDist = 0;
+  let maxIdx = 0;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const dx = last.x - first.x;
+  const dz = last.z - first.z;
+  const lineLenSq = dx * dx + dz * dz;
+
+  for (let i = 1; i < points.length - 1; i++) {
+    let dist: number;
+    if (lineLenSq === 0) {
+      dist = Math.sqrt((points[i].x - first.x) ** 2 + (points[i].z - first.z) ** 2);
+    } else {
+      const t = Math.max(0, Math.min(1, ((points[i].x - first.x) * dx + (points[i].z - first.z) * dz) / lineLenSq));
+      const projX = first.x + t * dx;
+      const projZ = first.z + t * dz;
+      dist = Math.sqrt((points[i].x - projX) ** 2 + (points[i].z - projZ) ** 2);
+    }
+    if (dist > maxDist) {
+      maxDist = dist;
+      maxIdx = i;
+    }
+  }
+
+  if (maxDist > epsilon) {
+    const left = simplifyPath(points.slice(0, maxIdx + 1), epsilon);
+    const right = simplifyPath(points.slice(maxIdx), epsilon);
+    return [...left.slice(0, -1), ...right];
+  }
+  return [first, last];
+}
+
+// Uniform subsample preserving first and last points
+function subsamplePath(points: { x: number; z: number }[], maxCount: number): { x: number; z: number }[] {
+  if (points.length <= maxCount) return points;
+  const result: { x: number; z: number }[] = [points[0]];
+  const step = (points.length - 1) / (maxCount - 1);
+  for (let i = 1; i < maxCount - 1; i++) {
+    result.push(points[Math.round(i * step)]);
+  }
+  result.push(points[points.length - 1]);
+  return result;
+}
+
 const FRAME_DURATION = 1 / 30; // 1 frame at 30fps, normalized later
 
 export function useDrillEditor(initialDrill?: Drill) {
@@ -94,6 +152,9 @@ export function useDrillEditor(initialDrill?: Drill) {
     playbackSpeed: 1,
     isLooping: true,
     lastKeyframeHint: null,
+    isRecording: false,
+    recordingObjectId: null,
+    recordedPoints: null,
   });
 
   const undoStack = useRef<Drill[]>([]);
@@ -113,7 +174,14 @@ export function useDrillEditor(initialDrill?: Drill) {
   }, [pushUndo]);
 
   const setTool = useCallback((tool: ToolMode) => {
-    setState(prev => ({ ...prev, tool, drawingPath: null }));
+    setState(prev => ({
+      ...prev,
+      tool,
+      drawingPath: null,
+      isRecording: false,
+      recordingObjectId: null,
+      recordedPoints: null,
+    }));
   }, []);
 
   const setCurrentColor = useCallback((color: [number, number, number]) => {
@@ -200,12 +268,16 @@ export function useDrillEditor(initialDrill?: Drill) {
 
       pushUndo(prev.drill);
 
+      const smooth = pathStyle === PathStyle.SOLID ||
+                     pathStyle === PathStyle.DOTTED ||
+                     pathStyle === PathStyle.BACKWARD;
       const path: DrillPath = {
         id: `path_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         style: pathStyle,
         color: [...prev.currentColor],
         hasArrow: true,
         waypoints: [...prev.drawingPath],
+        smooth,
       };
 
       return {
@@ -317,7 +389,7 @@ export function useDrillEditor(initialDrill?: Drill) {
 
       if (kfIndex === -1) {
         // Create new keyframe track for this object
-        keyframes.push({ objectId, waypoints: [{ x, z, t }] });
+        keyframes.push({ objectId, waypoints: [{ x, z, t }], smooth: true });
       } else {
         const waypoints = [...keyframes[kfIndex].waypoints];
         // Replace existing waypoint at same time (within tolerance) or insert
@@ -354,7 +426,7 @@ export function useDrillEditor(initialDrill?: Drill) {
           waypoints.push({ x: obj.x, z: obj.z, t: 0 });
         }
         waypoints.push({ x, z, t });
-        keyframes.push({ objectId, waypoints });
+        keyframes.push({ objectId, waypoints, smooth: true });
       } else {
         const waypoints = [...keyframes[kfIndex].waypoints];
         const existingIdx = waypoints.findIndex(wp => Math.abs(wp.t - t) < 0.005);
@@ -443,6 +515,177 @@ export function useDrillEditor(initialDrill?: Drill) {
     });
   }, []);
 
+  const updatePathSmooth = useCallback((id: string, smooth: boolean) => {
+    setState(prev => {
+      pushUndo(prev.drill);
+      return {
+        ...prev,
+        drill: {
+          ...prev.drill,
+          paths: prev.drill.paths.map(p => p.id === id ? { ...p, smooth } : p),
+          updatedAt: Date.now(),
+        },
+      };
+    });
+  }, [pushUndo]);
+
+  // --- Recording actions ---
+
+  const startRecording = useCallback(() => {
+    setState(prev => {
+      if (prev.tool !== ToolMode.SELECT || !prev.selectedObjectId || prev.isRecording) return prev;
+      const obj = prev.drill.objects.find(o => o.id === prev.selectedObjectId);
+      if (!obj) return prev;
+
+      // Get interpolated position as first point
+      const kf = prev.drill.keyframes.find(k => k.objectId === obj.id);
+      let firstPos = { x: obj.x, z: obj.z };
+      if (kf && kf.waypoints.length > 0) {
+        const smooth = kf.smooth;
+        if (smooth && kf.waypoints.length > 2) {
+          // Use spline interpolation — import not available here, use linear fallback
+          const t = prev.playbackTime;
+          const wps = kf.waypoints;
+          if (t <= wps[0].t) firstPos = { x: wps[0].x, z: wps[0].z };
+          else if (t >= wps[wps.length - 1].t) firstPos = { x: wps[wps.length - 1].x, z: wps[wps.length - 1].z };
+          else {
+            for (let i = 0; i < wps.length - 1; i++) {
+              if (t >= wps[i].t && t <= wps[i + 1].t) {
+                const segT = (t - wps[i].t) / (wps[i + 1].t - wps[i].t);
+                firstPos = {
+                  x: wps[i].x + (wps[i + 1].x - wps[i].x) * segT,
+                  z: wps[i].z + (wps[i + 1].z - wps[i].z) * segT,
+                };
+                break;
+              }
+            }
+          }
+        } else if (kf.waypoints.length > 0) {
+          const t = prev.playbackTime;
+          const wps = kf.waypoints;
+          if (t <= wps[0].t) firstPos = { x: wps[0].x, z: wps[0].z };
+          else if (t >= wps[wps.length - 1].t) firstPos = { x: wps[wps.length - 1].x, z: wps[wps.length - 1].z };
+          else {
+            for (let i = 0; i < wps.length - 1; i++) {
+              if (t >= wps[i].t && t <= wps[i + 1].t) {
+                const segT = (t - wps[i].t) / (wps[i + 1].t - wps[i].t);
+                firstPos = {
+                  x: wps[i].x + (wps[i + 1].x - wps[i].x) * segT,
+                  z: wps[i].z + (wps[i + 1].z - wps[i].z) * segT,
+                };
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      return {
+        ...prev,
+        isPlaying: false,
+        isRecording: true,
+        recordingObjectId: prev.selectedObjectId,
+        recordedPoints: [firstPos],
+      };
+    });
+  }, []);
+
+  const addRecordingPoint = useCallback((x: number, z: number) => {
+    setState(prev => {
+      if (!prev.isRecording || !prev.recordedPoints) return prev;
+      const last = prev.recordedPoints[prev.recordedPoints.length - 1];
+      const dist = Math.sqrt((x - last.x) ** 2 + (z - last.z) ** 2);
+      if (dist < 1.5) return prev;
+      return { ...prev, recordedPoints: [...prev.recordedPoints, { x, z }] };
+    });
+  }, []);
+
+  const cancelRecording = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      isRecording: false,
+      recordingObjectId: null,
+      recordedPoints: null,
+    }));
+  }, []);
+
+  const finishRecording = useCallback(() => {
+    setState(prev => {
+      if (!prev.isRecording || !prev.recordedPoints || !prev.recordingObjectId) {
+        return { ...prev, isRecording: false, recordingObjectId: null, recordedPoints: null };
+      }
+      if (prev.recordedPoints.length < 2) {
+        return { ...prev, isRecording: false, recordingObjectId: null, recordedPoints: null };
+      }
+      // Check object still exists
+      const obj = prev.drill.objects.find(o => o.id === prev.recordingObjectId);
+      if (!obj) {
+        return { ...prev, isRecording: false, recordingObjectId: null, recordedPoints: null };
+      }
+
+      // RDP simplification
+      const simplified = simplifyPath(prev.recordedPoints, 2.0);
+      // Cap at 30 points
+      let finalPoints = simplified;
+      if (finalPoints.length > 40) {
+        finalPoints = subsamplePath(finalPoints, 30);
+      }
+
+      // Time distribution (arc length based)
+      let startT = prev.playbackTime;
+      if (startT >= 0.95) startT = 0;
+      const endT = 1.0;
+
+      const cumDist: number[] = [0];
+      for (let i = 1; i < finalPoints.length; i++) {
+        const dx = finalPoints[i].x - finalPoints[i - 1].x;
+        const dz = finalPoints[i].z - finalPoints[i - 1].z;
+        cumDist.push(cumDist[i - 1] + Math.sqrt(dx * dx + dz * dz));
+      }
+      const totalDist = cumDist[cumDist.length - 1];
+
+      const waypoints = finalPoints.map((p, i) => ({
+        x: p.x,
+        z: p.z,
+        t: totalDist > 0 ? startT + (endT - startT) * (cumDist[i] / totalDist) : startT,
+      }));
+
+      // Push undo
+      pushUndo(prev.drill);
+
+      // Replace or create keyframe track
+      const keyframes = [...prev.drill.keyframes];
+      const kfIndex = keyframes.findIndex(kf => kf.objectId === prev.recordingObjectId);
+      if (kfIndex === -1) {
+        keyframes.push({ objectId: prev.recordingObjectId!, waypoints, smooth: true });
+      } else {
+        keyframes[kfIndex] = { ...keyframes[kfIndex], waypoints, smooth: true };
+      }
+
+      return {
+        ...prev,
+        isRecording: false,
+        recordingObjectId: null,
+        recordedPoints: null,
+        drill: { ...prev.drill, keyframes, updatedAt: Date.now() },
+      };
+    });
+  }, [pushUndo]);
+
+  const updateKeyframeSmooth = useCallback((objectId: string, smooth: boolean) => {
+    setState(prev => {
+      pushUndo(prev.drill);
+      return {
+        ...prev,
+        drill: {
+          ...prev.drill,
+          keyframes: prev.drill.keyframes.map(kf => kf.objectId === objectId ? { ...kf, smooth } : kf),
+          updatedAt: Date.now(),
+        },
+      };
+    });
+  }, [pushUndo]);
+
   return {
     state,
     actions: {
@@ -478,6 +721,12 @@ export function useDrillEditor(initialDrill?: Drill) {
       setLooping,
       stepForward,
       stepBackward,
+      updatePathSmooth,
+      updateKeyframeSmooth,
+      startRecording,
+      addRecordingPoint,
+      finishRecording,
+      cancelRecording,
     } as DrillEditorActions,
   };
 }

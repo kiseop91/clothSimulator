@@ -37,6 +37,41 @@ export function deleteDrill(id: string): void {
   localStorage.setItem(KEY, JSON.stringify(drills));
 }
 
+// --- Practice Sessions ---
+import type { PracticeSession } from '../types/drill';
+
+const SESSION_KEY = 'hockey_drill_studio_sessions';
+
+export function saveSession(session: PracticeSession): void {
+  const sessions = loadSessions();
+  const idx = sessions.findIndex(s => s.id === session.id);
+  if (idx >= 0) {
+    sessions[idx] = { ...session, updatedAt: Date.now() };
+  } else {
+    sessions.push(session);
+  }
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessions));
+  } catch {
+    // storage full
+  }
+}
+
+export function loadSessions(): PracticeSession[] {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as PracticeSession[];
+  } catch {
+    return [];
+  }
+}
+
+export function deleteSession(id: string): void {
+  const sessions = loadSessions().filter(s => s.id !== id);
+  localStorage.setItem(SESSION_KEY, JSON.stringify(sessions));
+}
+
 export function exportDrillJSON(drill: Drill): string {
   return JSON.stringify(drill, null, 2);
 }

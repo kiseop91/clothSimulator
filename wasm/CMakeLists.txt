@@ -36,7 +36,8 @@ set_target_properties(renderer PROPERTIES
         -s ALLOW_MEMORY_GROWTH=1 \
         -s INITIAL_MEMORY=67108864 \
         -s ENVIRONMENT='web' \
-        -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8'] \
+        -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAPF32'] \
+        -s EXPORTED_FUNCTIONS=['_malloc','_free'] \
         --bind \
         -s NO_EXIT_RUNTIME=1 \
         -O2 \

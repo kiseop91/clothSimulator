@@ -97,6 +97,48 @@ export function createEmptyDrill(name: string = 'Untitled Drill'): Drill {
   };
 }
 
+// --- Practice Session types ---
+
+export enum BlockCategory {
+  WARMUP = 'warmup',
+  SKATING = 'skating',
+  SKILLS = 'skills',
+  TACTICAL = 'tactical',
+  SCRIMMAGE = 'scrimmage',
+  CONDITIONING = 'conditioning',
+  COOLDOWN = 'cooldown',
+  TRANSITION = 'transition',
+}
+
+export const BLOCK_CATEGORY_META: Record<BlockCategory, { label: string; color: string }> = {
+  [BlockCategory.WARMUP]:       { label: 'Warmup',       color: '#f59e0b' },
+  [BlockCategory.SKATING]:      { label: 'Skating',      color: '#3b82f6' },
+  [BlockCategory.SKILLS]:       { label: 'Skills',       color: '#10b981' },
+  [BlockCategory.TACTICAL]:     { label: 'Tactical',     color: '#8b5cf6' },
+  [BlockCategory.SCRIMMAGE]:    { label: 'Scrimmage',    color: '#ef4444' },
+  [BlockCategory.CONDITIONING]: { label: 'Conditioning', color: '#f97316' },
+  [BlockCategory.COOLDOWN]:     { label: 'Cooldown',     color: '#06b6d4' },
+  [BlockCategory.TRANSITION]:   { label: 'Transition',   color: '#6b7280' },
+};
+
+export interface SessionBlock {
+  id: string;
+  name: string;
+  category: BlockCategory;
+  durationMinutes: number;
+  drillId: string | null;
+  notes: string;
+}
+
+export interface PracticeSession {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  targetDurationMinutes: number;
+  blocks: SessionBlock[];
+}
+
 // Default team colors
 export const TEAM_COLORS = {
   red: [0.8, 0.15, 0.15] as [number, number, number],

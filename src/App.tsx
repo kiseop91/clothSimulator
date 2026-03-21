@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
-import { Layout, Monitor, PanelRightOpen, PanelRightClose, X, RotateCcw, BookOpen, Sparkles, SmartphoneIcon } from 'lucide-react';
+import { Layout, Monitor, PanelRightOpen, PanelRightClose, X, RotateCcw, BookOpen, Sparkles, SmartphoneIcon, Wand2 } from 'lucide-react';
 import { useRenderer } from './context/RendererContext.tsx';
 import { useDrillEditor } from './hooks/useDrillEditor.ts';
 import { createEmptyDrill, type Drill } from './types/drill.ts';
@@ -14,6 +14,8 @@ import DrillLibrary from './components/DrillLibrary.tsx';
 import AnimationTimeline from './components/AnimationTimeline.tsx';
 import ExportDialog from './components/ExportDialog.tsx';
 import AIGenerateDialog from './components/AIGenerateDialog.tsx';
+import AIAnimateBar from './components/AIAnimateBar.tsx';
+import SessionBuilder from './components/SessionBuilder.tsx';
 
 function useIsPortraitMobile() {
   const [isPortrait, setIsPortrait] = useState(false);
@@ -39,7 +41,10 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [showAIGenerate, setShowAIGenerate] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [sidebarMode, setSidebarMode] = useState<'drill' | 'session'>('drill');
   const [showDescription, setShowDescription] = useState(false);
+  const [showAIAnimate, setShowAIAnimate] = useState(false);
+  const [aiSelectedIds, setAISelectedIds] = useState<string[]>([]);
   const isPortraitMobile = useIsPortraitMobile();
 
   // Welcome screen / AI-first flow states (shared by mobile + PC)
@@ -128,6 +133,20 @@ export default function App() {
       console.warn('Failed to sync animation:', e);
     }
   }, [state.drill.keyframes, state.drill.objects, bridge]);
+
+  // Re-sync all data to WASM when switching to 3D view
+  useEffect(() => {
+    if (!state.is2D) {
+      bridge.syncTokens(state.drill.objects);
+      bridge.syncPaths(state.drill.paths);
+      try {
+        bridge.syncAnimation(state.drill.keyframes, state.drill.objects);
+      } catch (e) {
+        console.warn('Failed to sync animation on 3D switch:', e);
+      }
+      bridge.setPlaybackTime(state.playbackTime);
+    }
+  }, [state.is2D]);
 
   // Welcome loading message cycling
   const WELCOME_LOADING_MESSAGES = [
@@ -461,6 +480,26 @@ export default function App() {
             AI Generate
           </button>
           <button
+            onClick={() => {
+              if (showAIAnimate) {
+                setShowAIAnimate(false);
+                setAISelectedIds([]);
+              } else {
+                actions.setPlaying(false);
+                setShowAIAnimate(true);
+              }
+            }}
+            disabled={state.drill.objects.length === 0}
+            className={`px-3 py-1.5 rounded-md text-sm transition-colors cursor-pointer flex items-center gap-1.5 ${
+              showAIAnimate
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-white disabled:opacity-40 disabled:cursor-not-allowed'
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            AI Animate
+          </button>
+          <button
             onClick={() => setShowExport(true)}
             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm transition-colors cursor-pointer"
           >
@@ -537,7 +576,14 @@ export default function App() {
                   <div className="relative w-full h-full bg-white/5 rounded-lg border border-gray-700 overflow-hidden">
                     <RinkBackground />
                     <div className="absolute inset-0">
-                      <DrillEditor state={state} actions={actions} bridge={bridge} />
+                      <DrillEditor
+                        state={state}
+                        actions={actions}
+                        bridge={bridge}
+                        isAIAnimateMode={showAIAnimate}
+                        aiSelectedIds={aiSelectedIds}
+                        onAISelectionChange={setAISelectedIds}
+                      />
                     </div>
                   </div>
                 </div>
@@ -588,25 +634,66 @@ export default function App() {
             <AnimationTimeline state={state} actions={actions} bridge={bridge} />
           </div>
 
+          {/* AI Animate Bar */}
+          {showAIAnimate && !showWelcome && (
+            <AIAnimateBar
+              state={state}
+              actions={actions}
+              bridge={bridge}
+              aiSelectedIds={aiSelectedIds}
+              onClose={() => {
+                setShowAIAnimate(false);
+                setAISelectedIds([]);
+              }}
+            />
+          )}
+
           {/* Playback controls */}
           <PlaybackControls state={state} actions={actions} bridge={bridge} />
         </div>
 
-        {/* Right: Properties + Library — desktop */}
+        {/* Right: Properties + Library / Session — desktop */}
         <div className="hidden lg:flex w-72 flex-col border-l border-gray-700 bg-gray-800">
-          <div className="shrink-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
-            <DrillPropertiesPanel state={state} actions={actions} bridge={bridge} />
+          {/* Tab toggle */}
+          <div className="flex border-b border-gray-700 shrink-0">
+            <button
+              onClick={() => setSidebarMode('drill')}
+              className={`flex-1 py-2 text-xs font-medium transition-colors cursor-pointer ${
+                sidebarMode === 'drill' ? 'text-white bg-gray-700' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Drill
+            </button>
+            <button
+              onClick={() => setSidebarMode('session')}
+              className={`flex-1 py-2 text-xs font-medium transition-colors cursor-pointer ${
+                sidebarMode === 'session' ? 'text-white bg-gray-700' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Session
+            </button>
           </div>
-          <div className="flex-1 min-h-0 border-t border-gray-700 overflow-hidden">
-            <DrillLibrary
-              currentDrillId={state.drill.id}
-              onSelect={handleSelectDrill}
-              onNew={handleNewDrill}
-            />
-          </div>
+          {sidebarMode === 'drill' ? (
+            <>
+              <div className="shrink-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
+                <DrillPropertiesPanel state={state} actions={actions} bridge={bridge} />
+              </div>
+              <div className="flex-1 min-h-0 border-t border-gray-700 overflow-hidden">
+                <DrillLibrary
+                  currentDrillId={state.drill.id}
+                  onSelect={handleSelectDrill}
+                  onNew={handleNewDrill}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <SessionBuilder onLoadDrill={handleSelectDrill} />
+            </div>
+          )}
         </div>
 
-        {/* Right: Properties + Library — mobile overlay */}
+        {/* Right: Properties + Library / Session — mobile overlay */}
         {showSidebar && (
           <>
             <div
@@ -615,7 +702,24 @@ export default function App() {
             />
             <div className="lg:hidden fixed right-0 top-0 bottom-0 w-72 z-40 flex flex-col bg-gray-800 shadow-2xl">
               <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
-                <span className="text-sm font-medium text-gray-200">Properties</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setSidebarMode('drill')}
+                    className={`text-xs font-medium px-2 py-1 rounded cursor-pointer ${
+                      sidebarMode === 'drill' ? 'text-white bg-gray-700' : 'text-gray-400'
+                    }`}
+                  >
+                    Drill
+                  </button>
+                  <button
+                    onClick={() => setSidebarMode('session')}
+                    className={`text-xs font-medium px-2 py-1 rounded cursor-pointer ${
+                      sidebarMode === 'session' ? 'text-white bg-gray-700' : 'text-gray-400'
+                    }`}
+                  >
+                    Session
+                  </button>
+                </div>
                 <button
                   onClick={() => setShowSidebar(false)}
                   className="p-1 text-gray-400 hover:text-white cursor-pointer"
@@ -623,16 +727,24 @@ export default function App() {
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="flex-1 overflow-hidden flex flex-col">
-                <DrillPropertiesPanel state={state} actions={actions} bridge={bridge} />
-              </div>
-              <div className="h-56 border-t border-gray-700 overflow-hidden">
-                <DrillLibrary
-                  currentDrillId={state.drill.id}
-                  onSelect={handleSelectDrill}
-                  onNew={handleNewDrill}
-                />
-              </div>
+              {sidebarMode === 'drill' ? (
+                <>
+                  <div className="flex-1 overflow-hidden flex flex-col">
+                    <DrillPropertiesPanel state={state} actions={actions} bridge={bridge} />
+                  </div>
+                  <div className="h-56 border-t border-gray-700 overflow-hidden">
+                    <DrillLibrary
+                      currentDrillId={state.drill.id}
+                      onSelect={handleSelectDrill}
+                      onNew={handleNewDrill}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <SessionBuilder onLoadDrill={handleSelectDrill} />
+                </div>
+              )}
             </div>
           </>
         )}

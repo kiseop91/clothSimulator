@@ -40,11 +40,13 @@ interface DrillPath {
   color: [number, number, number];
   hasArrow: boolean;
   waypoints: Array<{ x: number; z: number }>;
+  smooth?: boolean;   // true for curved skate paths, false for straight passes/shots
 }
 
 interface DrillKeyframe {
   objectId: string;   // must match a DrillObject id
   waypoints: Array<{ x: number; z: number; t: number }>; // t: 0..1 normalized time
+  smooth?: boolean;   // true for smooth curved movement
 }
 
 interface Drill {
@@ -81,6 +83,9 @@ NHL rink: 200×85 feet.
 - Common team colors: red [0.8,0.15,0.15], blue [0.15,0.3,0.8], black [0.2,0.2,0.2]
 - Puck color: [0.2,0.2,0.2], Coach/Goalie: [0.9,0.9,0.9]
 - Duration: typically 5-12 seconds
+- smooth: true → skate paths (SOLID, DOTTED, BACKWARD) for curved movement
+- smooth: false → passes (DASHED) and shots (ZIGZAG) for straight lines
+- Set smooth: true on keyframes for curved animation movement
 
 ## Hockey Rules & Tactics Reference
 ${HOCKEY_KNOWLEDGE}
@@ -88,6 +93,12 @@ ${HOCKEY_KNOWLEDGE}
 ## Example
 
 ${example}
+
+## STRICT RULES
+- name: 드릴 이름만 (최대 100자, 한국어/영어)
+- description: 드릴의 목적과 진행 방식만 간결하게 (최대 500자)
+- 소설, 시, 에세이, 이야기 등 하키와 무관한 콘텐츠 생성 금지
+- description이나 name에 하키 드릴과 무관한 내용을 넣지 마세요
 
 ## Task
 

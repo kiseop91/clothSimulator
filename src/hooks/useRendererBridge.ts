@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react';
 import type { WasmModule } from '../types/wasm.d.ts';
 import type { DrillObject, DrillPath, DrillKeyframe } from '../types/drill';
 import { PathStyle } from '../types/drill';
+import { tessellateSpline, tessellateSplineWithTime } from '../lib/catmullRom';
 
 export interface RendererBridge {
   // Tokens
@@ -83,12 +84,15 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     // Build flat float array: [style, r,g,b, hasArrow, N, x1,z1, x2,z2, ...] per path
     const floats: number[] = [];
     for (const path of paths) {
+      const wp = (path.smooth && path.waypoints.length > 2)
+        ? tessellateSpline(path.waypoints, 16)
+        : path.waypoints;
       floats.push(path.style);
       floats.push(path.color[0], path.color[1], path.color[2]);
       floats.push(path.hasArrow ? 1 : 0);
-      floats.push(path.waypoints.length);
-      for (const wp of path.waypoints) {
-        floats.push(wp.x, wp.z);
+      floats.push(wp.length);
+      for (const w of wp) {
+        floats.push(w.x, w.z);
       }
     }
 
@@ -122,10 +126,16 @@ export function useRendererBridge(module: WasmModule | null): RendererBridge {
     for (const kf of keyframes) {
       const meshIdx = map.get(kf.objectId);
       if (meshIdx === undefined) continue; // skip keyframes for removed objects
-      floats.push(meshIdx);
-      floats.push(kf.waypoints.length);
-      for (const wp of kf.waypoints) {
-        floats.push(wp.x, wp.z, wp.t);
+      if (kf.smooth && kf.waypoints.length > 2) {
+        const dense = tessellateSplineWithTime(kf.waypoints, 16);
+        floats.push(meshIdx, dense.length);
+        for (const wp of dense) { floats.push(wp.x, wp.z, wp.t); }
+      } else {
+        floats.push(meshIdx);
+        floats.push(kf.waypoints.length);
+        for (const wp of kf.waypoints) {
+          floats.push(wp.x, wp.z, wp.t);
+        }
       }
     }
 

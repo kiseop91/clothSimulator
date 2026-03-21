@@ -2,6 +2,10 @@ import express from 'express';
 import { spawn } from 'child_process';
 import { buildPrompt } from './drillPrompt.js';
 import { validateAndSanitize } from './validateDrill.js';
+import { buildAnimationPrompt } from './animationPrompt.js';
+import { validateAndSanitizeMoves } from './validateAnimation.js';
+import { computeKeyframes } from './computeKeyframes.js';
+import { validatePromptInput, ABUSE_WARNING } from './promptGuard.js';
 
 const app = express();
 app.use(express.json());
@@ -11,6 +15,26 @@ app.post('/api/generate-drill', async (req, res) => {
 
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
     res.status(400).json({ error: 'Prompt is required' });
+    return;
+  }
+
+  const guard = validatePromptInput(prompt.trim());
+  if (!guard.safe) {
+    console.log('Prompt blocked:', guard.reason);
+    res.json({
+      drill: {
+        id: `drill_${Date.now()}`,
+        name: 'Blocked',
+        description: ABUSE_WARNING,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        rinkLayout: 0,
+        duration: 5,
+        objects: [],
+        paths: [],
+        keyframes: [],
+      },
+    });
     return;
   }
 
@@ -73,6 +97,107 @@ app.post('/api/generate-drill', async (req, res) => {
     console.error('Generate drill error:', err.message);
     if (err.message.includes('parse') || err.message.includes('JSON') || err.message.includes('Missing')) {
       res.status(422).json({ error: `Invalid drill format: ${err.message}` });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
+app.post('/api/generate-animation', async (req, res) => {
+  const { prompt, objects, selectedObjectIds, existingKeyframes, duration } = req.body;
+
+  if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+    res.status(400).json({ error: 'Prompt is required' });
+    return;
+  }
+  if (!Array.isArray(objects) || objects.length === 0) {
+    res.status(400).json({ error: 'Objects array is required' });
+    return;
+  }
+
+  const animGuard = validatePromptInput(prompt.trim());
+  if (!animGuard.safe) {
+    console.log('Animation prompt blocked:', animGuard.reason);
+    res.status(422).json({ error: ABUSE_WARNING });
+    return;
+  }
+
+  const fullPrompt = buildAnimationPrompt({
+    prompt: prompt.trim(),
+    objects,
+    selectedObjectIds,
+    existingKeyframes: existingKeyframes || [],
+    duration: duration || 5,
+  });
+
+  try {
+    const result = await new Promise<string>((resolve, reject) => {
+      const proc = spawn('claude', ['-p', '--output-format', 'text'], {
+        shell: true,
+        timeout: 120_000,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      proc.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        if (code !== 0) {
+          reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+        } else {
+          resolve(stdout);
+        }
+      });
+
+      proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Failed to spawn Claude CLI: ${err.message}`));
+      });
+
+      proc.stdin.write(fullPrompt);
+      proc.stdin.end();
+
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        proc.kill();
+        reject(new Error('Claude CLI timed out after 120 seconds'));
+      }, 120_000);
+    });
+
+    console.log('Animation CLI stdout length:', result.length);
+    console.log('Animation CLI stdout preview:', result.slice(0, 200));
+
+    const validObjectIds = objects.map((o: any) => o.id);
+    const validated = validateAndSanitizeMoves(result, validObjectIds);
+    const computed = computeKeyframes(
+      validated.moves,
+      objects,
+      existingKeyframes || [],
+      duration || 5
+    );
+
+    res.json({
+      keyframes: computed.keyframes,
+      paths: computed.paths,
+      duration: computed.duration,
+      warnings: validated.warnings,
+    });
+  } catch (err: any) {
+    console.error('Generate animation error:', err.message);
+    if (err.message.includes('parse') || err.message.includes('JSON') || err.message.includes('Missing') || err.message.includes('No valid')) {
+      res.status(422).json({ error: `Invalid animation format: ${err.message}` });
     } else {
       res.status(500).json({ error: err.message });
     }

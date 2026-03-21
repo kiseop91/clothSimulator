@@ -1,3 +1,5 @@
+import { sanitizeTextField, ABUSE_WARNING } from './promptGuard.js';
+
 interface DrillObject {
   id: string;
   type: number;
@@ -97,6 +99,25 @@ export function validateAndSanitize(raw: string): Drill {
   }
   if (!parsed.description) {
     parsed.description = '';
+  }
+
+  // Sanitize text fields for abuse
+  const nameResult = sanitizeTextField(parsed.name, 100);
+  parsed.name = nameResult.text;
+
+  const descResult = sanitizeTextField(parsed.description, 500);
+  if (descResult.abused) {
+    parsed.description = ABUSE_WARNING;
+  } else {
+    parsed.description = descResult.text;
+  }
+
+  // Sanitize object labels
+  for (const obj of parsed.objects) {
+    if (obj.label) {
+      const labelResult = sanitizeTextField(obj.label, 20);
+      obj.label = labelResult.text;
+    }
   }
 
   // Clamp object coordinates
