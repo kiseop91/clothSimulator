@@ -1,0 +1,8 @@
+{
+  "name": "Hockey Drill Studio",
+  "short_name": "Drill Studio",
+  "display": "standalone",
+  "orientation": "landscape",
+  "theme_color": "#1f2937",
+  "background_color": "#111827"
+}

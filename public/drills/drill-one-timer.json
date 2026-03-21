@@ -1,0 +1,149 @@
+{
+  "id": "drill-one-timer",
+  "name": "크로스아이스 원타이머 (Cross-Ice One-Timer)",
+  "description": "Setup man feeds cross-ice passes to a shooter who practices one-timers. 3 rounds of pass-and-shoot from different angles.",
+  "createdAt": 1742515200000,
+  "updatedAt": 1742515200000,
+  "rinkLayout": 0,
+  "duration": 15,
+  "objects": [
+    { "id": "setter", "type": 0, "x": 65, "z": -28, "color": [0.15, 0.3, 0.8], "label": "S" },
+    { "id": "shooter", "type": 0, "x": 55, "z": 20, "color": [0.15, 0.3, 0.8], "label": "SH" },
+    { "id": "goalie", "type": 3, "x": 88, "z": 0, "color": [0.9, 0.9, 0.9], "label": "G" },
+    { "id": "cone1", "type": 2, "x": 60, "z": -10, "color": [1, 0.55, 0] },
+    { "id": "cone2", "type": 2, "x": 60, "z": 10, "color": [1, 0.55, 0] },
+    { "id": "puck", "type": 1, "x": 65, "z": -28, "color": [0.2, 0.2, 0.2] }
+  ],
+  "paths": [
+    {
+      "id": "path-pass-r1",
+      "style": 1,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 65, "z": -28 },
+        { "x": 55, "z": 20 }
+      ]
+    },
+    {
+      "id": "path-shot-r1",
+      "style": 2,
+      "color": [0.8, 0.15, 0.15],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 55, "z": 20 },
+        { "x": 88, "z": 0 }
+      ]
+    },
+    {
+      "id": "path-pass-r2",
+      "style": 1,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 70, "z": -25 },
+        { "x": 50, "z": 18 }
+      ]
+    },
+    {
+      "id": "path-shot-r2",
+      "style": 2,
+      "color": [0.8, 0.15, 0.15],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 50, "z": 18 },
+        { "x": 88, "z": 0 }
+      ]
+    },
+    {
+      "id": "path-pass-r3",
+      "style": 1,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 75, "z": -22 },
+        { "x": 52, "z": 22 }
+      ]
+    },
+    {
+      "id": "path-shot-r3",
+      "style": 2,
+      "color": [0.8, 0.15, 0.15],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 52, "z": 22 },
+        { "x": 88, "z": 0 }
+      ]
+    }
+  ],
+  "keyframes": [
+    {
+      "objectId": "setter",
+      "waypoints": [
+        { "x": 65, "z": -28, "t": 0.0 },
+        { "x": 65, "z": -28, "t": 0.10 },
+        { "x": 65, "z": -28, "t": 0.30 },
+        { "x": 70, "z": -25, "t": 0.36 },
+        { "x": 70, "z": -25, "t": 0.43 },
+        { "x": 70, "z": -25, "t": 0.63 },
+        { "x": 75, "z": -22, "t": 0.70 },
+        { "x": 75, "z": -22, "t": 0.77 },
+        { "x": 75, "z": -22, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "shooter",
+      "waypoints": [
+        { "x": 55, "z": 20, "t": 0.0 },
+        { "x": 55, "z": 20, "t": 0.30 },
+        { "x": 50, "z": 18, "t": 0.36 },
+        { "x": 50, "z": 18, "t": 0.63 },
+        { "x": 52, "z": 22, "t": 0.70 },
+        { "x": 52, "z": 22, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "goalie",
+      "waypoints": [
+        { "x": 88, "z": 0, "t": 0.0 },
+        { "x": 87, "z": 2, "t": 0.18 },
+        { "x": 88, "z": 0, "t": 0.30 },
+        { "x": 87, "z": 1, "t": 0.51 },
+        { "x": 88, "z": 0, "t": 0.63 },
+        { "x": 87, "z": 3, "t": 0.85 },
+        { "x": 88, "z": 0, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "cone1",
+      "waypoints": [
+        { "x": 60, "z": -10, "t": 0.0 },
+        { "x": 60, "z": -10, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "cone2",
+      "waypoints": [
+        { "x": 60, "z": 10, "t": 0.0 },
+        { "x": 60, "z": 10, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "puck",
+      "waypoints": [
+        { "x": 65, "z": -28, "t": 0.0 },
+        { "x": 55, "z": 20, "t": 0.10 },
+        { "x": 88, "z": 0, "t": 0.18 },
+        { "x": 70, "z": -25, "t": 0.30 },
+        { "x": 70, "z": -25, "t": 0.33 },
+        { "x": 50, "z": 18, "t": 0.43 },
+        { "x": 88, "z": 0, "t": 0.51 },
+        { "x": 75, "z": -22, "t": 0.63 },
+        { "x": 75, "z": -22, "t": 0.67 },
+        { "x": 52, "z": 22, "t": 0.77 },
+        { "x": 88, "z": 0, "t": 0.85 },
+        { "x": 88, "z": 0, "t": 1.0 }
+      ]
+    }
+  ]
+}

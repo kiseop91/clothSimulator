@@ -2,7 +2,7 @@
 
 namespace ShaderSources {
 
-// ─── PBR Vertex Shader ───────────────────────────────────────────────
+// --- PBR Vertex Shader ---
 static const char* pbrVertexShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -30,7 +30,7 @@ void main() {
 }
 )glsl";
 
-// ─── PBR Fragment Shader (Cook-Torrance + Shadow + Texture + Hemisphere) ──
+// --- PBR Fragment Shader (Cook-Torrance + Shadow + Hemisphere) ---
 static const char* pbrFragmentShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -46,19 +46,15 @@ uniform vec3 u_camPos;
 uniform vec3 u_lightPos;
 uniform vec3 u_lightColor;
 
-// Shadow
 uniform sampler2D u_shadowMap;
 uniform bool u_shadowEnabled;
 
-// Texture
 uniform sampler2D u_diffuseMap;
 uniform bool u_hasTexture;
 
-// Hemisphere ambient
 uniform vec3 u_ambientTop;
 uniform vec3 u_ambientBottom;
 
-// UV transform
 uniform float u_uvOffsetU;
 uniform float u_uvOffsetV;
 uniform float u_uvTilingU;
@@ -94,7 +90,6 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// PCF Shadow Sampling
 float calcShadow(vec4 lightSpacePos, vec3 N, vec3 L) {
     if (!u_shadowEnabled) return 0.0;
 
@@ -107,7 +102,6 @@ float calcShadow(vec4 lightSpacePos, vec3 N, vec3 L) {
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
     float currentDepth = projCoords.z;
 
-    // PCF 3x3
     float shadow = 0.0;
     vec2 texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
     for (int x = -1; x <= 1; x++) {
@@ -125,7 +119,6 @@ void main() {
     vec3 L = normalize(u_lightPos - vWorldPos);
     vec3 H = normalize(V + L);
 
-    // Albedo: texture (sRGB→linear) or base color
     vec2 uv = vTexCoord * vec2(u_uvTilingU, u_uvTilingV) + vec2(u_uvOffsetU, u_uvOffsetV);
     vec3 texColor = texture(u_diffuseMap, uv).rgb;
     vec3 albedo = u_hasTexture ? pow(texColor, vec3(2.2)) : u_baseColor;
@@ -133,7 +126,6 @@ void main() {
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, u_metallic);
 
-    // Cook-Torrance BRDF
     float NDF = distributionGGX(N, H, u_roughness);
     float G = geometrySmith(N, V, L, u_roughness);
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -148,28 +140,24 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
 
     float dist = length(u_lightPos - vWorldPos);
-    float attenuation = 1.0 / (1.0 + 0.001 * dist * dist);
+    float attenuation = 1.0 / (1.0 + 0.00001 * dist * dist);
     vec3 radiance = u_lightColor * attenuation;
 
-    // Shadow
     float shadow = calcShadow(vLightSpacePos, N, L);
 
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL * (1.0 - shadow);
 
-    // Hemisphere ambient
     float hemisphereWeight = dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
     vec3 ambient = mix(u_ambientBottom, u_ambientTop, hemisphereWeight) * albedo;
 
     vec3 color = ambient + Lo;
-
-    // Gamma correction
     color = pow(color, vec3(1.0 / 2.2));
 
     fragColor = vec4(color, 1.0);
 }
 )glsl";
 
-// ─── Shadow Depth Vertex Shader ─────────────────────────────────────
+// --- Shadow Depth Vertex Shader ---
 static const char* shadowVertexShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -183,7 +171,7 @@ void main() {
 }
 )glsl";
 
-// ─── Shadow Depth Fragment Shader ───────────────────────────────────
+// --- Shadow Depth Fragment Shader ---
 static const char* shadowFragmentShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -194,7 +182,7 @@ void main() {
 }
 )glsl";
 
-// ─── Grid Vertex Shader ──────────────────────────────────────────────
+// --- Grid Vertex Shader ---
 static const char* gridVertexShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -211,7 +199,7 @@ void main() {
 }
 )glsl";
 
-// ─── Grid Fragment Shader ────────────────────────────────────────────
+// --- Grid Fragment Shader ---
 static const char* gridFragmentShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -239,7 +227,7 @@ void main() {
 }
 )glsl";
 
-// ─── Wireframe Vertex Shader ────────────────────────────────────────
+// --- Wireframe Vertex Shader ---
 static const char* wireVertexShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -254,7 +242,7 @@ void main() {
 }
 )glsl";
 
-// ─── Wireframe Fragment Shader ──────────────────────────────────────
+// --- Wireframe Fragment Shader ---
 static const char* wireFragmentShader = R"glsl(#version 300 es
 precision highp float;
 
@@ -264,6 +252,68 @@ out vec4 fragColor;
 
 void main() {
     fragColor = u_color;
+}
+)glsl";
+
+// --- Rink Vertex Shader (vertex color) ---
+static const char* rinkVertexShader = R"glsl(#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aColor;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+out vec3 vColor;
+
+void main() {
+    vColor = aColor;
+    gl_Position = u_projection * u_view * vec4(aPosition, 1.0);
+}
+)glsl";
+
+// --- Rink Fragment Shader ---
+static const char* rinkFragmentShader = R"glsl(#version 300 es
+precision highp float;
+
+in vec3 vColor;
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(vColor, 1.0);
+}
+)glsl";
+
+// --- Path Vertex Shader (position + color per vertex) ---
+static const char* pathVertexShader = R"glsl(#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aColor;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+out vec3 vColor;
+
+void main() {
+    vColor = aColor;
+    gl_Position = u_projection * u_view * vec4(aPosition, 1.0);
+}
+)glsl";
+
+// --- Path Fragment Shader ---
+static const char* pathFragmentShader = R"glsl(#version 300 es
+precision highp float;
+
+in vec3 vColor;
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(vColor, 1.0);
 }
 )glsl";
 

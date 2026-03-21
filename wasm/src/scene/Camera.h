@@ -4,6 +4,8 @@
 
 class Camera {
 public:
+    enum CameraPreset { TOP_DOWN = 0, BROADCAST = 1, END_ZONE = 2, FREE = 3 };
+
     Camera();
 
     glm::mat4 getViewMatrix() const;
@@ -14,6 +16,7 @@ public:
     void zoom(float delta);
     void pan(float dx, float dy);
     void resetView();
+    void setPreset(CameraPreset preset);
     void screenToRay(float ndcX, float ndcY, float aspect, glm::vec3& origin, glm::vec3& dir) const;
 
 private:
@@ -27,7 +30,7 @@ private:
     float farPlane_;
 
     static constexpr float MIN_DISTANCE = 0.5f;
-    static constexpr float MAX_DISTANCE = 100.0f;
-    static constexpr float PHI_MIN = 0.1f;
-    static constexpr float PHI_MAX = 3.04f; // just under PI
+    static constexpr float MAX_DISTANCE = 300.0f;
+    static constexpr float PHI_MIN = 0.01f;
+    static constexpr float PHI_MAX = 3.04f;
 };

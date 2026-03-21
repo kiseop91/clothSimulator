@@ -1,121 +1,46 @@
-// ─── IndexedDB: model file storage ─────────────────────────────
+import type { Drill } from '../types/drill';
 
-const DB_NAME = 'clothsim_db';
-const DB_VERSION = 1;
-const STORE_NAME = 'models';
+const KEY = 'hockey_drill_studio_drills';
 
-export interface SavedModel {
-  id: string;
-  name: string;
-  extension: string;
-  data: ArrayBuffer;
-  timestamp: number;
-}
-
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-export async function saveModelToDB(
-  id: string,
-  name: string,
-  extension: string,
-  data: ArrayBuffer,
-): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put({
-      id,
-      name,
-      extension,
-      data,
-      timestamp: Date.now(),
-    });
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
-  });
-}
-
-export async function getAllModels(): Promise<SavedModel[]> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const request = tx.objectStore(STORE_NAME).getAll();
-    request.onsuccess = () => { db.close(); resolve(request.result); };
-    request.onerror = () => { db.close(); reject(request.error); };
-  });
-}
-
-export async function deleteModelFromDB(id: string): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).delete(id);
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
-  });
-}
-
-export async function clearAllModels(): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).clear();
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
-  });
-}
-
-// ─── LocalStorage: scene state ─────────────────────────────────
-
-const SCENE_KEY = 'clothsim_scene_state';
-
-export interface SavedSceneState {
-  collisionSpheres: Array<{ x: number; y: number; z: number; radius: number }>;
-  clothSettings: {
-    gravity: [number, number, number];
-    wind: [number, number, number];
-    stiffness: number;
-    damping: number;
-    friction: number;
-  };
-  meshTransforms: Array<{ name: string; x: number; y: number; z: number; visible: boolean }>;
-  material: {
-    baseColor: [number, number, number];
-    metallic: number;
-    roughness: number;
-  };
-}
-
-export function saveSceneState(state: SavedSceneState): void {
+export function saveDrill(drill: Drill): void {
+  const drills = loadDrills();
+  const idx = drills.findIndex(d => d.id === drill.id);
+  if (idx >= 0) {
+    drills[idx] = { ...drill, updatedAt: Date.now() };
+  } else {
+    drills.push(drill);
+  }
   try {
-    localStorage.setItem(SCENE_KEY, JSON.stringify(state));
+    localStorage.setItem(KEY, JSON.stringify(drills));
   } catch {
-    // localStorage full or unavailable — silently ignore
+    // storage full
   }
 }
 
-export function loadSceneState(): SavedSceneState | null {
+export function loadDrills(): Drill[] {
   try {
-    const raw = localStorage.getItem(SCENE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return [];
+    const drills: Drill[] = JSON.parse(raw);
+    // Migrate older drills missing duration field
+    for (const d of drills) {
+      if (d.duration === undefined) d.duration = 5;
+    }
+    return drills;
   } catch {
-    return null;
+    return [];
   }
 }
 
-export function clearSceneState(): void {
-  localStorage.removeItem(SCENE_KEY);
+export function deleteDrill(id: string): void {
+  const drills = loadDrills().filter(d => d.id !== id);
+  localStorage.setItem(KEY, JSON.stringify(drills));
+}
+
+export function exportDrillJSON(drill: Drill): string {
+  return JSON.stringify(drill, null, 2);
+}
+
+export function importDrillJSON(json: string): Drill {
+  return JSON.parse(json) as Drill;
 }

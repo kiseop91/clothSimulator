@@ -1,575 +1,194 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import type { WasmModule } from "../types/wasm.d.ts";
-import { saveSceneState } from "../lib/storage.ts";
-
-export interface Transform {
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-}
-
-export interface Material {
-  baseColor: [number, number, number];
-  metallic: number;
-  roughness: number;
-}
-
-export interface MeshInfo {
-  vertices: number;
-  faces: number;
-  triangles: number;
-}
-
-export interface Layer {
-  name: string;
-  visible: boolean;
-}
-
-export interface CollisionSphere {
-  x: number;
-  y: number;
-  z: number;
-  radius: number;
-}
-
-export interface LoadedMesh {
-  name: string;
-  x: number;
-  y: number;
-  z: number;
-  visible: boolean;
-}
-
-export interface SimulationState {
-  running: boolean;
-  gravity: [number, number, number];
-  wind: [number, number, number];
-  stiffness: number;
-  damping: number;
-  friction: number;
-  selfCollision: boolean;
-  clothThickness: number;
-  clothAdded: boolean;
-  collisionSpheres: CollisionSphere[];
-  selectedObjectType: 'none' | 'sphere' | 'cloth';
-  selectedObjectIndex: number;
-}
+import { useCallback, useRef } from 'react';
+import type { WasmModule } from '../types/wasm.d.ts';
+import type { DrillObject, DrillPath, DrillKeyframe } from '../types/drill';
+import { PathStyle } from '../types/drill';
 
 export interface RendererBridge {
-  transform: Transform;
-  material: Material;
-  meshInfo: MeshInfo;
-  layers: Layer[];
-  simulation: SimulationState;
-  loadedMeshes: LoadedMesh[];
-  selectedMeshIndex: number;
-  setPosition: (x: number, y: number, z: number) => void;
-  setRotation: (x: number, y: number, z: number) => void;
-  setScale: (x: number, y: number, z: number) => void;
-  setBaseColor: (r: number, g: number, b: number) => void;
-  setMetallic: (value: number) => void;
-  setRoughness: (value: number) => void;
-  setLayerVisible: (name: string, visible: boolean) => void;
-  loadModel: (data: ArrayBuffer, extension: string) => boolean;
-  refreshMeshInfo: () => void;
-  addClothMesh: (width: number, height: number, resX: number, resY: number) => void;
-  addClothMeshHorizontal: (width: number, depth: number, resX: number, resZ: number, dropHeight: number) => void;
-  toggleSimulation: (running: boolean) => void;
-  resetCloth: () => void;
-  setGravity: (x: number, y: number, z: number) => void;
-  setWindForce: (x: number, y: number, z: number) => void;
-  setClothStiffness: (value: number) => void;
-  setClothDamping: (value: number) => void;
-  setClothFriction: (value: number) => void;
-  setSelfCollision: (enabled: boolean) => void;
-  setClothThickness: (value: number) => void;
-  selectCloth: () => void;
-  convertMeshToCloth: (meshIndex: number, pinMode: number) => void;
-  getLoadedMeshCount: () => number;
-  getLoadedMeshName: (index: number) => string;
-  setMeshPosition: (index: number, x: number, y: number, z: number) => void;
-  removeLoadedMesh: (index: number) => void;
-  setMeshVisible: (index: number, visible: boolean) => void;
-  selectMesh: (index: number) => void;
-  deselectMesh: () => void;
-  setWireframeMode: (enabled: boolean) => void;
-  loadDiffuseTexture: (data: ArrayBuffer) => void;
-  clearDiffuseTexture: () => void;
-  // Light
-  light: { position: [number, number, number]; color: [number, number, number]; intensity: number; ambientTop: [number, number, number]; ambientBottom: [number, number, number] };
-  setLightPosition: (x: number, y: number, z: number) => void;
-  setLightColor: (r: number, g: number, b: number) => void;
-  setLightIntensity: (v: number) => void;
-  setAmbientTop: (r: number, g: number, b: number) => void;
-  setAmbientBottom: (r: number, g: number, b: number) => void;
-  // UV
-  uvSettings: { tiling: [number, number]; offset: [number, number] };
-  setUVTiling: (u: number, v: number) => void;
-  setUVOffset: (u: number, v: number) => void;
-  addCollisionSphere: (x: number, y: number, z: number, radius: number) => void;
-  removeCollisionSphere: (index: number) => void;
-  pickObject: (ndcX: number, ndcY: number) => number;
-  selectSphere: (index: number) => void;
-  deselectAll: () => void;
-  setCollisionSpherePosition: (index: number, x: number, y: number, z: number) => void;
-  translateCloth: (dx: number, dy: number, dz: number) => void;
+  // Tokens
+  syncTokens: (objects: DrillObject[]) => void;
+  addToken: (obj: DrillObject) => number;
+  updateTokenPosition: (idx: number, x: number, z: number) => void;
+  removeToken: (idx: number) => void;
+  clearTokens: () => void;
+
+  // Paths
+  syncPaths: (paths: DrillPath[]) => void;
+  clearPaths: () => void;
+
+  // Animation
+  syncAnimation: (keyframes: DrillKeyframe[], objects: DrillObject[]) => void;
+  setPlaybackTime: (t: number) => void;
+  clearAnimation: () => void;
+
+  // Camera
+  setCameraPreset: (preset: number) => void;
+
+  // Rink
+  setRinkLayout: (layout: number) => void;
+
+  // Screenshot
+  exportScreenshot: () => string | null;
+
+  // Canvas access for video export
+  getCanvas: () => HTMLCanvasElement | null;
 }
 
 export function useRendererBridge(module: WasmModule | null): RendererBridge {
-  const [transform, setTransform] = useState<Transform>({
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-    scale: [1, 1, 1],
-  });
-
-  const [material, setMaterial] = useState<Material>({
-    baseColor: [0.8, 0.8, 0.8],
-    metallic: 0.0,
-    roughness: 0.5,
-  });
-
-  const [light, setLight] = useState({
-    position: [5, 8, 5] as [number, number, number],
-    color: [1, 1, 1] as [number, number, number],
-    intensity: 3.0,
-    ambientTop: [0.3, 0.35, 0.45] as [number, number, number],
-    ambientBottom: [0.15, 0.12, 0.1] as [number, number, number],
-  });
-
-  const [uvSettings, setUVSettings] = useState({
-    tiling: [1, 1] as [number, number],
-    offset: [0, 0] as [number, number],
-  });
-
-  const [meshInfo, setMeshInfo] = useState<MeshInfo>({
-    vertices: 0,
-    faces: 0,
-    triangles: 0,
-  });
-
-  const [layers, setLayers] = useState<Layer[]>([]);
-  const [loadedMeshes, setLoadedMeshes] = useState<LoadedMesh[]>([]);
-  const [selectedMeshIndex, setSelectedMeshIndex] = useState(-1);
-
-  const [simulation, setSimulation] = useState<SimulationState>({
-    running: false,
-    gravity: [0, -9.81, 0],
-    wind: [0, 0, 0],
-    stiffness: 0.9,
-    damping: 0.01,
-    friction: 0.5,
-    selfCollision: false,
-    clothThickness: 0.05,
-    clothAdded: false,
-    collisionSpheres: [],
-    selectedObjectType: 'none',
-    selectedObjectIndex: -1,
-  });
-
   const moduleRef = useRef(module);
   moduleRef.current = module;
 
-  const setPosition = useCallback((x: number, y: number, z: number) => {
-    setTransform((prev) => ({ ...prev, position: [x, y, z] }));
-    moduleRef.current?.setPosition(x, y, z);
-  }, []);
+  // Maps objectId → mesh index assigned by WASM
+  const meshIndexMapRef = useRef<Map<string, number>>(new Map());
 
-  const setRotation = useCallback((x: number, y: number, z: number) => {
-    setTransform((prev) => ({ ...prev, rotation: [x, y, z] }));
-    moduleRef.current?.setRotation(x, y, z);
-  }, []);
-
-  const setScale = useCallback((x: number, y: number, z: number) => {
-    setTransform((prev) => ({ ...prev, scale: [x, y, z] }));
-    moduleRef.current?.setScale(x, y, z);
-  }, []);
-
-  const setBaseColor = useCallback((r: number, g: number, b: number) => {
-    setMaterial((prev) => ({ ...prev, baseColor: [r, g, b] }));
-    moduleRef.current?.setBaseColor(r, g, b);
-  }, []);
-
-  const setMetallic = useCallback((value: number) => {
-    setMaterial((prev) => ({ ...prev, metallic: value }));
-    moduleRef.current?.setMetallic(value);
-  }, []);
-
-  const setRoughness = useCallback((value: number) => {
-    setMaterial((prev) => ({ ...prev, roughness: value }));
-    moduleRef.current?.setRoughness(value);
-  }, []);
-
-  const setLayerVisible = useCallback((name: string, visible: boolean) => {
-    setLayers((prev) =>
-      prev.map((l) => (l.name === name ? { ...l, visible } : l))
-    );
-    moduleRef.current?.setLayerVisible(name, visible);
-  }, []);
-
-  const refreshMeshInfo = useCallback(() => {
-    if (!moduleRef.current) return;
-    setMeshInfo({
-      vertices: moduleRef.current.getVertexCount(),
-      faces: moduleRef.current.getFaceCount(),
-      triangles: moduleRef.current.getTriangleCount(),
-    });
-  }, []);
-
-  const loadModel = useCallback(
-    (data: ArrayBuffer, extension: string): boolean => {
-      if (!moduleRef.current) return false;
-      const uint8 = new Uint8Array(data);
-      const success = moduleRef.current.loadModel(uint8, uint8.length, extension);
-      if (success) {
-        refreshMeshInfo();
-        setTransform({ position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
-        setMaterial({ baseColor: [0.8, 0.8, 0.8], metallic: 0.0, roughness: 0.5 });
-        setLayers([]);
-        // Populate loaded meshes list
-        const count = moduleRef.current.getLoadedMeshCount();
-        const meshes: LoadedMesh[] = [];
-        for (let i = 0; i < count; i++) {
-          meshes.push({
-            name: moduleRef.current.getLoadedMeshName(i) || `mesh_${i}`,
-            x: 0, y: 0, z: 0, visible: true,
-          });
-        }
-        setLoadedMeshes(meshes);
-        setSelectedMeshIndex(-1);
-      }
-      return success;
-    },
-    [refreshMeshInfo]
-  );
-
-  const addClothMesh = useCallback(
-    (width: number, height: number, resX: number, resY: number) => {
-      moduleRef.current?.addClothMesh(width, height, resX, resY);
-      setSimulation((prev) => ({ ...prev, clothAdded: true, running: false }));
-    },
-    []
-  );
-
-  const addClothMeshHorizontal = useCallback(
-    (width: number, depth: number, resX: number, resZ: number, dropHeight: number) => {
-      moduleRef.current?.addClothMeshHorizontal(width, depth, resX, resZ, dropHeight);
-      setSimulation((prev) => ({ ...prev, clothAdded: true, running: false }));
-    },
-    []
-  );
-
-  const toggleSimulation = useCallback((running: boolean) => {
-    moduleRef.current?.toggleSimulation(running);
-    setSimulation((prev) => ({ ...prev, running }));
-  }, []);
-
-  const resetCloth = useCallback(() => {
-    moduleRef.current?.resetCloth();
-    setSimulation((prev) => ({ ...prev, running: false }));
-  }, []);
-
-  const setGravity = useCallback((x: number, y: number, z: number) => {
-    setSimulation((prev) => ({ ...prev, gravity: [x, y, z] }));
-    moduleRef.current?.setGravity(x, y, z);
-  }, []);
-
-  const setWindForce = useCallback((x: number, y: number, z: number) => {
-    setSimulation((prev) => ({ ...prev, wind: [x, y, z] }));
-    moduleRef.current?.setWindForce(x, y, z);
-  }, []);
-
-  const setClothStiffness = useCallback((value: number) => {
-    setSimulation((prev) => ({ ...prev, stiffness: value }));
-    moduleRef.current?.setClothStiffness(value);
-  }, []);
-
-  const setClothDamping = useCallback((value: number) => {
-    setSimulation((prev) => ({ ...prev, damping: value }));
-    moduleRef.current?.setClothDamping(value);
-  }, []);
-
-  const setClothFriction = useCallback((value: number) => {
-    setSimulation((prev) => ({ ...prev, friction: value }));
-    moduleRef.current?.setClothFriction(value);
-  }, []);
-
-  const setSelfCollision = useCallback((enabled: boolean) => {
-    setSimulation((prev) => ({ ...prev, selfCollision: enabled }));
-    moduleRef.current?.setSelfCollision(enabled);
-  }, []);
-
-  const setClothThickness = useCallback((value: number) => {
-    setSimulation((prev) => ({ ...prev, clothThickness: value }));
-    moduleRef.current?.setClothThickness(value);
-  }, []);
-
-  const selectCloth = useCallback(() => {
-    moduleRef.current?.setSelectedSphere(-1);
-    setSimulation((prev) => ({
-      ...prev,
-      selectedObjectType: 'cloth',
-      selectedObjectIndex: 0,
-    }));
-  }, []);
-
-  const convertMeshToCloth = useCallback((meshIndex: number, pinMode: number) => {
-    moduleRef.current?.convertMeshToCloth(meshIndex, pinMode);
-    setSimulation((prev) => ({ ...prev, clothAdded: true, running: false }));
-  }, []);
-
-  const getLoadedMeshCount = useCallback((): number => {
-    return moduleRef.current?.getLoadedMeshCount() ?? 0;
-  }, []);
-
-  const getLoadedMeshName = useCallback((index: number): string => {
-    return moduleRef.current?.getLoadedMeshName(index) ?? '';
-  }, []);
-
-  const setMeshPositionBridge = useCallback(
-    (index: number, x: number, y: number, z: number) => {
-      moduleRef.current?.setMeshPosition(index, x, y, z);
-      setLoadedMeshes((prev) => prev.map((m, i) => i === index ? { ...m, x, y, z } : m));
-    }, []
-  );
-
-  const removeLoadedMeshBridge = useCallback((index: number) => {
-    moduleRef.current?.removeLoadedMesh(index);
-    setLoadedMeshes((prev) => prev.filter((_, i) => i !== index));
-    setSelectedMeshIndex((prev) => prev === index ? -1 : prev > index ? prev - 1 : prev);
-  }, []);
-
-  const setMeshVisibleBridge = useCallback((index: number, visible: boolean) => {
-    moduleRef.current?.setMeshVisible(index, visible);
-    setLoadedMeshes((prev) => prev.map((m, i) => i === index ? { ...m, visible } : m));
-  }, []);
-
-  const selectMesh = useCallback((index: number) => {
-    setSelectedMeshIndex(index);
-  }, []);
-
-  const deselectMesh = useCallback(() => {
-    setSelectedMeshIndex(-1);
-  }, []);
-
-  const setWireframeModeCallback = useCallback((enabled: boolean) => {
-    moduleRef.current?.setWireframeMode(enabled);
-  }, []);
-
-  const loadDiffuseTextureCallback = useCallback((data: ArrayBuffer) => {
-    if (!moduleRef.current) return;
-    const uint8 = new Uint8Array(data);
-    moduleRef.current.loadDiffuseTexture(uint8, uint8.length);
-  }, []);
-
-  const clearDiffuseTextureCallback = useCallback(() => {
-    moduleRef.current?.clearDiffuseTexture();
-  }, []);
-
-  // Light callbacks
-  const setLightPositionCb = useCallback((x: number, y: number, z: number) => {
-    setLight(prev => ({ ...prev, position: [x, y, z] }));
-    moduleRef.current?.setLightPosition(x, y, z);
-  }, []);
-
-  const setLightColorCb = useCallback((r: number, g: number, b: number) => {
-    setLight(prev => ({ ...prev, color: [r, g, b] }));
-    moduleRef.current?.setLightColor(r, g, b);
-  }, []);
-
-  const setLightIntensityCb = useCallback((v: number) => {
-    setLight(prev => ({ ...prev, intensity: v }));
-    moduleRef.current?.setLightIntensity(v);
-  }, []);
-
-  const setAmbientTopCb = useCallback((r: number, g: number, b: number) => {
-    setLight(prev => ({ ...prev, ambientTop: [r, g, b] }));
-    moduleRef.current?.setAmbientTop(r, g, b);
-  }, []);
-
-  const setAmbientBottomCb = useCallback((r: number, g: number, b: number) => {
-    setLight(prev => ({ ...prev, ambientBottom: [r, g, b] }));
-    moduleRef.current?.setAmbientBottom(r, g, b);
-  }, []);
-
-  // UV callbacks
-  const setUVTilingCb = useCallback((u: number, v: number) => {
-    setUVSettings(prev => ({ ...prev, tiling: [u, v] }));
-    moduleRef.current?.setUVTiling(u, v);
-  }, []);
-
-  const setUVOffsetCb = useCallback((u: number, v: number) => {
-    setUVSettings(prev => ({ ...prev, offset: [u, v] }));
-    moduleRef.current?.setUVOffset(u, v);
-  }, []);
-
-  const addCollisionSphere = useCallback(
-    (x: number, y: number, z: number, radius: number) => {
-      moduleRef.current?.addCollisionSphere(x, y, z, radius);
-      setSimulation((prev) => ({
-        ...prev,
-        collisionSpheres: [...prev.collisionSpheres, { x, y, z, radius }],
-      }));
-    },
-    []
-  );
-
-  const removeCollisionSphere = useCallback((index: number) => {
-    moduleRef.current?.removeCollisionSphere(index);
-    setSimulation((prev) => ({
-      ...prev,
-      collisionSpheres: prev.collisionSpheres.filter((_, i) => i !== index),
-      // Deselect if removed sphere was selected
-      selectedObjectType: prev.selectedObjectType === 'sphere' && prev.selectedObjectIndex === index ? 'none' : prev.selectedObjectType,
-      selectedObjectIndex: prev.selectedObjectType === 'sphere' && prev.selectedObjectIndex === index ? -1
-        : prev.selectedObjectType === 'sphere' && prev.selectedObjectIndex > index ? prev.selectedObjectIndex - 1
-        : prev.selectedObjectIndex,
-    }));
-  }, []);
-
-  const pickObject = useCallback((ndcX: number, ndcY: number): number => {
-    if (!moduleRef.current) return -1;
-    const index = moduleRef.current.pickObject(ndcX, ndcY);
-    if (index >= 0) {
-      // Sphere selected
-      moduleRef.current.setSelectedSphere(index);
-      setSimulation((prev) => ({
-        ...prev,
-        selectedObjectType: 'sphere',
-        selectedObjectIndex: index,
-      }));
-    } else if (index === -2) {
-      // Cloth selected
-      moduleRef.current.setSelectedSphere(-1);
-      setSimulation((prev) => ({
-        ...prev,
-        selectedObjectType: 'cloth',
-        selectedObjectIndex: 0,
-      }));
-    } else {
-      // Nothing
-      moduleRef.current.setSelectedSphere(-1);
-      setSimulation((prev) => ({
-        ...prev,
-        selectedObjectType: 'none',
-        selectedObjectIndex: -1,
-      }));
+  const syncTokens = useCallback((objects: DrillObject[]) => {
+    const m = moduleRef.current;
+    if (!m) return;
+    m.clearAllTokens();
+    const newMap = new Map<string, number>();
+    for (let i = 0; i < objects.length; i++) {
+      const obj = objects[i];
+      m.addDrillToken(obj.type, obj.x, obj.z, obj.color[0], obj.color[1], obj.color[2]);
+      newMap.set(obj.id, i);
     }
-    return index;
+    meshIndexMapRef.current = newMap;
   }, []);
 
-  const selectSphere = useCallback((index: number) => {
-    moduleRef.current?.setSelectedSphere(index);
-    setSimulation((prev) => ({
-      ...prev,
-      selectedObjectType: 'sphere',
-      selectedObjectIndex: index,
-    }));
+  const addToken = useCallback((obj: DrillObject): number => {
+    const m = moduleRef.current;
+    if (!m) return -1;
+    return m.addDrillToken(obj.type, obj.x, obj.z, obj.color[0], obj.color[1], obj.color[2]);
   }, []);
 
-  const deselectAll = useCallback(() => {
-    moduleRef.current?.setSelectedSphere(-1);
-    setSimulation((prev) => ({
-      ...prev,
-      selectedObjectType: 'none',
-      selectedObjectIndex: -1,
-    }));
+  const updateTokenPosition = useCallback((idx: number, x: number, z: number) => {
+    moduleRef.current?.setTokenPosition(idx, x, z);
   }, []);
 
-  const setCollisionSpherePosition = useCallback(
-    (index: number, x: number, y: number, z: number) => {
-      moduleRef.current?.setCollisionSpherePosition(index, x, y, z);
-      setSimulation((prev) => ({
-        ...prev,
-        collisionSpheres: prev.collisionSpheres.map((s, i) =>
-          i === index ? { ...s, x, y, z } : s
-        ),
-      }));
-    },
-    []
-  );
-
-  const translateCloth = useCallback((dx: number, dy: number, dz: number) => {
-    moduleRef.current?.translateCloth(dx, dy, dz);
+  const removeToken = useCallback((idx: number) => {
+    moduleRef.current?.removeToken(idx);
   }, []);
 
-  // Auto-save scene state to LocalStorage (debounced)
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      saveSceneState({
-        collisionSpheres: simulation.collisionSpheres,
-        clothSettings: {
-          gravity: simulation.gravity,
-          wind: simulation.wind,
-          stiffness: simulation.stiffness,
-          damping: simulation.damping,
-          friction: simulation.friction,
-        },
-        meshTransforms: loadedMeshes,
-        material: {
-          baseColor: material.baseColor,
-          metallic: material.metallic,
-          roughness: material.roughness,
-        },
-      });
-    }, 500);
-    return () => clearTimeout(timeout);
-  }, [simulation, loadedMeshes, material]);
+  const clearTokens = useCallback(() => {
+    moduleRef.current?.clearAllTokens();
+  }, []);
+
+  const syncPaths = useCallback((paths: DrillPath[]) => {
+    const m = moduleRef.current;
+    if (!m || typeof m._malloc !== 'function') return;
+
+    if (paths.length === 0) {
+      m.clearDrillPaths();
+      return;
+    }
+
+    // Build flat float array: [style, r,g,b, hasArrow, N, x1,z1, x2,z2, ...] per path
+    const floats: number[] = [];
+    for (const path of paths) {
+      floats.push(path.style);
+      floats.push(path.color[0], path.color[1], path.color[2]);
+      floats.push(path.hasArrow ? 1 : 0);
+      floats.push(path.waypoints.length);
+      for (const wp of path.waypoints) {
+        floats.push(wp.x, wp.z);
+      }
+    }
+
+    // Allocate on WASM heap
+    const byteSize = floats.length * 4;
+    const ptr = m._malloc(byteSize);
+    const f32 = new Float32Array(m.HEAPF32.buffer, ptr, floats.length);
+    f32.set(floats);
+    m.setDrillPaths(ptr, floats.length);
+    m._free(ptr);
+  }, []);
+
+  const clearPaths = useCallback(() => {
+    moduleRef.current?.clearDrillPaths();
+  }, []);
+
+  const syncAnimation = useCallback((keyframes: DrillKeyframe[], objects: DrillObject[]) => {
+    const m = moduleRef.current;
+    if (!m || typeof m._malloc !== 'function') return;
+
+    if (keyframes.length === 0) {
+      m.clearAnimation();
+      return;
+    }
+
+    // Build objectId → mesh index map from current objects (fallback if syncTokens hasn't run)
+    const map = meshIndexMapRef.current;
+
+    // Build flat array: [meshIdx, numWP, x1,z1,t1, x2,z2,t2, ...] per keyframe
+    const floats: number[] = [];
+    for (const kf of keyframes) {
+      const meshIdx = map.get(kf.objectId);
+      if (meshIdx === undefined) continue; // skip keyframes for removed objects
+      floats.push(meshIdx);
+      floats.push(kf.waypoints.length);
+      for (const wp of kf.waypoints) {
+        floats.push(wp.x, wp.z, wp.t);
+      }
+    }
+
+    if (floats.length === 0) {
+      console.log('[Bridge] syncAnimation: no floats after processing, clearing');
+      m.clearAnimation();
+      return;
+    }
+
+    console.log('[Bridge] syncAnimation:', keyframes.length, 'keyframes,', floats.length, 'floats');
+    console.log('[Bridge] floats:', floats.slice(0, 20));
+    console.log('[Bridge] meshIndexMap:', Object.fromEntries(map.entries()));
+
+    try {
+      const byteSize = floats.length * 4;
+      const ptr = m._malloc(byteSize);
+      const f32 = new Float32Array(m.HEAPF32.buffer, ptr, floats.length);
+      f32.set(floats);
+      m.setAnimationData(ptr, floats.length);
+      m._free(ptr);
+    } catch (e) {
+      console.warn('syncAnimation WASM error:', e);
+    }
+  }, []);
+
+  const setPlaybackTime = useCallback((t: number) => {
+    moduleRef.current?.setPlaybackTime(t);
+  }, []);
+
+  const clearAnimation = useCallback(() => {
+    moduleRef.current?.clearAnimation();
+  }, []);
+
+  const setCameraPreset = useCallback((preset: number) => {
+    moduleRef.current?.setCameraPreset(preset);
+  }, []);
+
+  const setRinkLayout = useCallback((layout: number) => {
+    moduleRef.current?.setRinkLayout(layout);
+  }, []);
+
+  const exportScreenshot = useCallback((): string | null => {
+    return moduleRef.current?.exportScreenshot() ?? null;
+  }, []);
+
+  const getCanvas = useCallback((): HTMLCanvasElement | null => {
+    return document.getElementById('wasm-canvas') as HTMLCanvasElement | null;
+  }, []);
 
   return {
-    transform,
-    material,
-    meshInfo,
-    layers,
-    simulation,
-    loadedMeshes,
-    selectedMeshIndex,
-    setPosition,
-    setRotation,
-    setScale,
-    setBaseColor,
-    setMetallic,
-    setRoughness,
-    setLayerVisible,
-    loadModel,
-    refreshMeshInfo,
-    addClothMesh,
-    addClothMeshHorizontal,
-    toggleSimulation,
-    resetCloth,
-    setGravity,
-    setWindForce,
-    setClothStiffness,
-    setClothDamping,
-    setClothFriction,
-    setSelfCollision,
-    setClothThickness,
-    selectCloth,
-    convertMeshToCloth,
-    getLoadedMeshCount,
-    getLoadedMeshName,
-    setMeshPosition: setMeshPositionBridge,
-    removeLoadedMesh: removeLoadedMeshBridge,
-    setMeshVisible: setMeshVisibleBridge,
-    selectMesh,
-    deselectMesh,
-    setWireframeMode: setWireframeModeCallback,
-    loadDiffuseTexture: loadDiffuseTextureCallback,
-    clearDiffuseTexture: clearDiffuseTextureCallback,
-    light,
-    setLightPosition: setLightPositionCb,
-    setLightColor: setLightColorCb,
-    setLightIntensity: setLightIntensityCb,
-    setAmbientTop: setAmbientTopCb,
-    setAmbientBottom: setAmbientBottomCb,
-    uvSettings,
-    setUVTiling: setUVTilingCb,
-    setUVOffset: setUVOffsetCb,
-    addCollisionSphere,
-    removeCollisionSphere,
-    pickObject,
-    selectSphere,
-    deselectAll,
-    setCollisionSpherePosition,
-    translateCloth,
+    syncTokens,
+    addToken,
+    updateTokenPosition,
+    removeToken,
+    clearTokens,
+    syncPaths,
+    clearPaths,
+    syncAnimation,
+    setPlaybackTime,
+    clearAnimation,
+    setCameraPreset,
+    setRinkLayout,
+    exportScreenshot,
+    getCanvas,
   };
 }

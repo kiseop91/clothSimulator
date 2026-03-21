@@ -1,0 +1,108 @@
+{
+  "id": "drill-dump-chase",
+  "name": "덤프 앤 체이스 포체크 (Dump and Chase Forecheck)",
+  "description": "Forward dumps puck into offensive zone corner, 2 forecheckers chase and recover, pass out to point for a shot. Classic dump-and-chase system with cycling.",
+  "createdAt": 1742515200000,
+  "updatedAt": 1742515200000,
+  "rinkLayout": 0,
+  "duration": 12,
+  "objects": [
+    { "id": "f1", "type": 0, "x": -30, "z": -10, "color": [0.8, 0.15, 0.15], "label": "F1" },
+    { "id": "f2", "type": 0, "x": -30, "z": 10, "color": [0.8, 0.15, 0.15], "label": "F2" },
+    { "id": "f3", "type": 0, "x": -15, "z": 0, "color": [0.8, 0.15, 0.15], "label": "F3" },
+    { "id": "d1", "type": 0, "x": 30, "z": -18, "color": [0.8, 0.15, 0.15], "label": "D1" },
+    { "id": "d2", "type": 0, "x": 30, "z": 18, "color": [0.8, 0.15, 0.15], "label": "D2" },
+    { "id": "goalie", "type": 3, "x": 88, "z": 0, "color": [0.9, 0.9, 0.9], "label": "G" },
+    { "id": "puck", "type": 1, "x": -28, "z": -10, "color": [0.2, 0.2, 0.2] }
+  ],
+  "paths": [
+    { "id": "path-dump", "style": 3, "color": [0.8, 0.15, 0.15], "hasArrow": true, "waypoints": [{"x": -28, "z": -10}, {"x": 30, "z": -20}, {"x": 85, "z": -30}] },
+    { "id": "path-f1-chase", "style": 0, "color": [0.8, 0.15, 0.15], "hasArrow": true, "waypoints": [{"x": -30, "z": -10}, {"x": 20, "z": -15}, {"x": 60, "z": -25}, {"x": 85, "z": -30}] },
+    { "id": "path-f2-net", "style": 0, "color": [0.8, 0.15, 0.15], "hasArrow": true, "waypoints": [{"x": -30, "z": 10}, {"x": 20, "z": 5}, {"x": 60, "z": 0}, {"x": 75, "z": -3}] },
+    { "id": "path-f3-high", "style": 0, "color": [0.8, 0.15, 0.15], "hasArrow": true, "waypoints": [{"x": -15, "z": 0}, {"x": 20, "z": 0}, {"x": 50, "z": 0}] },
+    { "id": "path-pass1-f1-f2", "style": 1, "color": [0.9, 0.8, 0.1], "hasArrow": true, "waypoints": [{"x": 85, "z": -30}, {"x": 75, "z": -3}] },
+    { "id": "path-pass2-f2-d1", "style": 1, "color": [0.9, 0.8, 0.1], "hasArrow": true, "waypoints": [{"x": 75, "z": -3}, {"x": 50, "z": -20}] },
+    { "id": "path-pass3-d1-d2", "style": 1, "color": [0.9, 0.8, 0.1], "hasArrow": true, "waypoints": [{"x": 50, "z": -20}, {"x": 50, "z": 20}] },
+    { "id": "path-shot-d2", "style": 2, "color": [0.8, 0.15, 0.15], "hasArrow": true, "waypoints": [{"x": 50, "z": 20}, {"x": 88, "z": 0}] }
+  ],
+  "keyframes": [
+    {
+      "objectId": "f1",
+      "waypoints": [
+        {"x": -30, "z": -10, "t": 0.0},
+        {"x": 20, "z": -15, "t": 0.15},
+        {"x": 60, "z": -25, "t": 0.25},
+        {"x": 85, "z": -30, "t": 0.35},
+        {"x": 85, "z": -30, "t": 0.50},
+        {"x": 82, "z": -25, "t": 0.65},
+        {"x": 78, "z": -15, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "f2",
+      "waypoints": [
+        {"x": -30, "z": 10, "t": 0.0},
+        {"x": 20, "z": 5, "t": 0.15},
+        {"x": 60, "z": 0, "t": 0.30},
+        {"x": 75, "z": -3, "t": 0.42},
+        {"x": 75, "z": -3, "t": 0.50},
+        {"x": 73, "z": -5, "t": 0.65},
+        {"x": 70, "z": -5, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "f3",
+      "waypoints": [
+        {"x": -15, "z": 0, "t": 0.0},
+        {"x": 20, "z": 0, "t": 0.20},
+        {"x": 50, "z": 0, "t": 0.35},
+        {"x": 50, "z": 0, "t": 0.50},
+        {"x": 55, "z": -2, "t": 0.70},
+        {"x": 60, "z": -3, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "d1",
+      "waypoints": [
+        {"x": 30, "z": -18, "t": 0.0},
+        {"x": 40, "z": -19, "t": 0.25},
+        {"x": 50, "z": -20, "t": 0.50},
+        {"x": 50, "z": -20, "t": 0.65},
+        {"x": 48, "z": -18, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "d2",
+      "waypoints": [
+        {"x": 30, "z": 18, "t": 0.0},
+        {"x": 40, "z": 19, "t": 0.25},
+        {"x": 50, "z": 20, "t": 0.65},
+        {"x": 50, "z": 20, "t": 0.80},
+        {"x": 52, "z": 18, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "goalie",
+      "waypoints": [
+        {"x": 88, "z": 0, "t": 0.0},
+        {"x": 87, "z": -2, "t": 0.50},
+        {"x": 87, "z": 0, "t": 0.70},
+        {"x": 87, "z": 3, "t": 0.90},
+        {"x": 87, "z": 3, "t": 1.0}
+      ]
+    },
+    {
+      "objectId": "puck",
+      "waypoints": [
+        {"x": -28, "z": -10, "t": 0.0},
+        {"x": 30, "z": -20, "t": 0.08},
+        {"x": 85, "z": -30, "t": 0.15},
+        {"x": 85, "z": -30, "t": 0.35},
+        {"x": 75, "z": -3, "t": 0.50},
+        {"x": 50, "z": -20, "t": 0.65},
+        {"x": 50, "z": 20, "t": 0.80},
+        {"x": 88, "z": 0, "t": 1.0}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,182 @@
+{
+  "id": "drill-breakout",
+  "name": "디펜시브 존 브레이크아웃",
+  "description": "D-Zone Breakout: Defenseman retrieves puck behind own net, executes a breakout pass to a forward who rushes up ice for a shot on the far goal.",
+  "createdAt": 1742515200000,
+  "updatedAt": 1742515200000,
+  "rinkLayout": 0,
+  "duration": 12,
+  "objects": [
+    { "id": "d1", "type": 0, "x": -80, "z": 20, "color": [0.15, 0.3, 0.8], "label": "D1" },
+    { "id": "d2", "type": 0, "x": -80, "z": -20, "color": [0.15, 0.3, 0.8], "label": "D2" },
+    { "id": "f1", "type": 0, "x": -50, "z": 0, "color": [0.15, 0.3, 0.8], "label": "C" },
+    { "id": "f2", "type": 0, "x": -60, "z": -35, "color": [0.15, 0.3, 0.8], "label": "LW" },
+    { "id": "f3", "type": 0, "x": -60, "z": 35, "color": [0.15, 0.3, 0.8], "label": "RW" },
+    { "id": "goalie", "type": 3, "x": -88, "z": 0, "color": [0.9, 0.9, 0.9], "label": "G" },
+    { "id": "puck", "type": 1, "x": -90, "z": 15, "color": [0.2, 0.2, 0.2] }
+  ],
+  "paths": [
+    {
+      "id": "path-d1-retrieve",
+      "style": 0,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -80, "z": 20 },
+        { "x": -90, "z": 15 },
+        { "x": -90, "z": -5 }
+      ]
+    },
+    {
+      "id": "path-d1-to-d2",
+      "style": 1,
+      "color": [0.9, 0.8, 0.1],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -90, "z": -5 },
+        { "x": -80, "z": -20 }
+      ]
+    },
+    {
+      "id": "path-d2-to-f1",
+      "style": 1,
+      "color": [0.9, 0.8, 0.1],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -80, "z": -20 },
+        { "x": -25, "z": 0 }
+      ]
+    },
+    {
+      "id": "path-f1-rush",
+      "style": 0,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -50, "z": 0 },
+        { "x": -25, "z": 0 },
+        { "x": 0, "z": 0 },
+        { "x": 30, "z": 5 }
+      ]
+    },
+    {
+      "id": "path-f2-lane",
+      "style": 0,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -60, "z": -35 },
+        { "x": -25, "z": -30 },
+        { "x": 20, "z": -25 },
+        { "x": 60, "z": -20 }
+      ]
+    },
+    {
+      "id": "path-f3-lane",
+      "style": 0,
+      "color": [0.15, 0.3, 0.8],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": -60, "z": 35 },
+        { "x": -25, "z": 30 },
+        { "x": 20, "z": 28 },
+        { "x": 60, "z": 30 }
+      ]
+    },
+    {
+      "id": "path-f1-to-f3",
+      "style": 1,
+      "color": [0.9, 0.8, 0.1],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 30, "z": 5 },
+        { "x": 55, "z": 28 }
+      ]
+    },
+    {
+      "id": "path-f3-shot",
+      "style": 2,
+      "color": [0.8, 0.15, 0.15],
+      "hasArrow": true,
+      "waypoints": [
+        { "x": 70, "z": 30 },
+        { "x": 89, "z": 0 }
+      ]
+    }
+  ],
+  "keyframes": [
+    {
+      "objectId": "d1",
+      "waypoints": [
+        { "x": -80, "z": 20, "t": 0.0 },
+        { "x": -90, "z": 15, "t": 0.10 },
+        { "x": -90, "z": -5, "t": 0.15 },
+        { "x": -85, "z": -10, "t": 0.25 },
+        { "x": -80, "z": -10, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "d2",
+      "waypoints": [
+        { "x": -80, "z": -20, "t": 0.0 },
+        { "x": -80, "z": -20, "t": 0.15 },
+        { "x": -75, "z": -15, "t": 0.40 },
+        { "x": -70, "z": -15, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "f1",
+      "waypoints": [
+        { "x": -50, "z": 0, "t": 0.0 },
+        { "x": -25, "z": 0, "t": 0.25 },
+        { "x": 0, "z": 0, "t": 0.40 },
+        { "x": 30, "z": 5, "t": 0.60 },
+        { "x": 30, "z": 5, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "f2",
+      "waypoints": [
+        { "x": -60, "z": -35, "t": 0.0 },
+        { "x": -40, "z": -32, "t": 0.25 },
+        { "x": -10, "z": -28, "t": 0.40 },
+        { "x": 20, "z": -25, "t": 0.60 },
+        { "x": 60, "z": -20, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "f3",
+      "waypoints": [
+        { "x": -60, "z": 35, "t": 0.0 },
+        { "x": -40, "z": 33, "t": 0.25 },
+        { "x": -10, "z": 30, "t": 0.40 },
+        { "x": 20, "z": 28, "t": 0.60 },
+        { "x": 55, "z": 28, "t": 0.75 },
+        { "x": 70, "z": 30, "t": 0.85 },
+        { "x": 80, "z": 20, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "goalie",
+      "waypoints": [
+        { "x": -88, "z": 0, "t": 0.0 },
+        { "x": -88, "z": 0, "t": 1.0 }
+      ]
+    },
+    {
+      "objectId": "puck",
+      "waypoints": [
+        { "x": -90, "z": 15, "t": 0.0 },
+        { "x": -90, "z": 15, "t": 0.10 },
+        { "x": -90, "z": -5, "t": 0.15 },
+        { "x": -80, "z": -20, "t": 0.25 },
+        { "x": -25, "z": 0, "t": 0.40 },
+        { "x": 0, "z": 0, "t": 0.50 },
+        { "x": 30, "z": 5, "t": 0.60 },
+        { "x": 55, "z": 28, "t": 0.75 },
+        { "x": 70, "z": 30, "t": 0.85 },
+        { "x": 89, "z": 0, "t": 1.0 }
+      ]
+    }
+  ]
+}

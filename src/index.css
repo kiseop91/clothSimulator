@@ -51,3 +51,24 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #6b7280; /* gray-500 */
 }
+
+/* Mobile button ripple-pulse animation */
+@keyframes mobile-pulse {
+  0% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+.animate-mobile-pulse {
+  animation: mobile-pulse 3s ease-out infinite;
+  pointer-events: none;
+}

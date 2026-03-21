@@ -1,7 +1,7 @@
-import { createContext, useContext, type ReactNode } from "react";
-import { useWasmModule } from "../hooks/useWasmModule.ts";
-import { useRendererBridge, type RendererBridge } from "../hooks/useRendererBridge.ts";
-import type { WasmModule } from "../types/wasm.d.ts";
+import { createContext, useContext, type ReactNode } from 'react';
+import { useWasmModule } from '../hooks/useWasmModule.ts';
+import { useRendererBridge, type RendererBridge } from '../hooks/useRendererBridge.ts';
+import type { WasmModule } from '../types/wasm.d.ts';
 
 interface RendererContextValue {
   module: WasmModule | null;
@@ -33,7 +33,7 @@ export function RendererProvider({ children }: { children: ReactNode }) {
 export function useRenderer(): RendererContextValue {
   const ctx = useContext(RendererContext);
   if (!ctx) {
-    throw new Error("useRenderer must be used within a RendererProvider");
+    throw new Error('useRenderer must be used within a RendererProvider');
   }
   return ctx;
 }

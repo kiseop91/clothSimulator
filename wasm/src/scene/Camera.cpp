@@ -3,18 +3,46 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <cmath>
 
+static const float PI = 3.14159265359f;
+
 Camera::Camera() {
-    resetView();
     fov_ = 45.0f;
     nearPlane_ = 0.1f;
-    farPlane_ = 200.0f;
+    farPlane_ = 500.0f;
+    // Default to top-down view
+    setPreset(TOP_DOWN);
 }
 
 void Camera::resetView() {
-    theta_ = 0.785f;    // ~45 degrees azimuth
-    phi_ = 1.1f;        // ~63 degrees elevation
-    distance_ = 5.0f;
-    target_ = glm::vec3(0.0f, 0.5f, 0.0f);
+    setPreset(TOP_DOWN);
+}
+
+void Camera::setPreset(CameraPreset preset) {
+    target_ = glm::vec3(0.0f, 0.0f, 0.0f);
+
+    switch (preset) {
+        case TOP_DOWN:
+            theta_ = 0.0f;
+            phi_ = PHI_MIN;  // nearly straight down
+            distance_ = 140.0f;
+            break;
+        case BROADCAST:
+            theta_ = 0.0f;
+            phi_ = 0.5f;  // ~30 degrees elevation
+            distance_ = 120.0f;
+            break;
+        case END_ZONE:
+            theta_ = PI / 2.0f;
+            phi_ = 0.4f;
+            distance_ = 80.0f;
+            break;
+        case FREE:
+        default:
+            theta_ = 0.785f;
+            phi_ = 1.1f;
+            distance_ = 100.0f;
+            break;
+    }
 }
 
 glm::vec3 Camera::getPosition() const {
@@ -36,13 +64,12 @@ void Camera::rotate(float dx, float dy) {
     theta_ += dx * 0.01f;
     phi_ -= dy * 0.01f;
 
-    // Clamp phi to avoid flipping
     if (phi_ < PHI_MIN) phi_ = PHI_MIN;
     if (phi_ > PHI_MAX) phi_ = PHI_MAX;
 }
 
 void Camera::zoom(float delta) {
-    distance_ -= delta * 0.5f;
+    distance_ -= delta * 2.0f;
     if (distance_ < MIN_DISTANCE) distance_ = MIN_DISTANCE;
     if (distance_ > MAX_DISTANCE) distance_ = MAX_DISTANCE;
 }
@@ -63,7 +90,6 @@ void Camera::screenToRay(float ndcX, float ndcY, float aspect, glm::vec3& origin
 }
 
 void Camera::pan(float dx, float dy) {
-    // Compute camera-local right and up vectors
     glm::vec3 forward = glm::normalize(target_ - getPosition());
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
     glm::vec3 up = glm::normalize(glm::cross(right, forward));
