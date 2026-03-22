@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { spawn } from 'child_process';
 import { buildPrompt } from './drillPrompt.js';
@@ -6,11 +7,62 @@ import { buildAnimationPrompt } from './animationPrompt.js';
 import { validateAndSanitizeMoves } from './validateAnimation.js';
 import { computeKeyframes } from './computeKeyframes.js';
 import { validatePromptInput, ABUSE_WARNING } from './promptGuard.js';
+import { requireAuth, optionalAuth, supabaseAdmin, type AuthRequest } from './middleware/auth.js';
+import paymentRoutes from './paymentRoutes.js';
 
 const app = express();
+
+// Webhooks need raw body — register before express.json()
+app.use('/api/webhooks', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-app.post('/api/generate-drill', async (req, res) => {
+// Payment routes
+app.use(paymentRoutes);
+
+// AI usage check middleware for free tier
+async function checkAIUsage(req: AuthRequest, res: express.Response, next: express.NextFunction): Promise<void> {
+  if (!req.user) { next(); return; }
+  if (req.user.tier === 'pro') { next(); return; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { data } = await supabaseAdmin
+    .from('ai_usage')
+    .select('generation_count')
+    .eq('user_id', req.user.id)
+    .eq('usage_date', today)
+    .single();
+
+  const count = data?.generation_count ?? 0;
+  if (count >= 5) {
+    res.status(403).json({ error: '일일 AI 사용 한도 초과 (5회/일)', upgrade: true });
+    return;
+  }
+  next();
+}
+
+async function incrementAIUsage(userId: string): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data } = await supabaseAdmin
+    .from('ai_usage')
+    .select('generation_count')
+    .eq('user_id', userId)
+    .eq('usage_date', today)
+    .single();
+
+  if (data) {
+    await supabaseAdmin
+      .from('ai_usage')
+      .update({ generation_count: data.generation_count + 1 })
+      .eq('user_id', userId)
+      .eq('usage_date', today);
+  } else {
+    await supabaseAdmin
+      .from('ai_usage')
+      .insert({ user_id: userId, usage_date: today, generation_count: 1 });
+  }
+}
+
+app.post('/api/generate-drill', optionalAuth as any, checkAIUsage as any, async (req: AuthRequest, res) => {
   const { prompt } = req.body;
 
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -42,7 +94,6 @@ app.post('/api/generate-drill', async (req, res) => {
 
   try {
     const result = await new Promise<string>((resolve, reject) => {
-      // Use stdin pipe instead of -p arg to avoid shell metacharacter issues
       const proc = spawn('claude', ['-p', '--output-format', 'text'], {
         shell: true,
         timeout: 120_000,
@@ -76,11 +127,9 @@ app.post('/api/generate-drill', async (req, res) => {
         reject(new Error(`Failed to spawn Claude CLI: ${err.message}`));
       });
 
-      // Write prompt via stdin to avoid shell escaping problems
       proc.stdin.write(fullPrompt);
       proc.stdin.end();
 
-      // Safety timeout
       setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -92,6 +141,12 @@ app.post('/api/generate-drill', async (req, res) => {
     console.log('Claude CLI stdout length:', result.length);
     console.log('Claude CLI stdout preview:', result.slice(0, 200));
     const drill = validateAndSanitize(result);
+
+    // Increment AI usage
+    if (req.user) {
+      await incrementAIUsage(req.user.id);
+    }
+
     res.json({ drill });
   } catch (err: any) {
     console.error('Generate drill error:', err.message);
@@ -103,7 +158,7 @@ app.post('/api/generate-drill', async (req, res) => {
   }
 });
 
-app.post('/api/generate-animation', async (req, res) => {
+app.post('/api/generate-animation', optionalAuth as any, checkAIUsage as any, async (req: AuthRequest, res) => {
   const { prompt, objects, selectedObjectIds, existingKeyframes, duration } = req.body;
 
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -187,6 +242,11 @@ app.post('/api/generate-animation', async (req, res) => {
       existingKeyframes || [],
       duration || 5
     );
+
+    // Increment AI usage
+    if (req.user) {
+      await incrementAIUsage(req.user.id);
+    }
 
     res.json({
       keyframes: computed.keyframes,
