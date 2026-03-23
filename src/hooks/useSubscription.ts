@@ -11,15 +11,18 @@ interface Subscription {
 }
 
 interface UseSubscriptionReturn {
-  tier: 'free' | 'pro';
+  tier: 'free' | 'pro' | 'team';
   isProUser: boolean;
+  isTeamUser: boolean;
+  isCoach: boolean;
+  hasPremium: boolean; // pro OR team OR coach
   subscription: Subscription | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
 
 export function useSubscription(): UseSubscriptionReturn {
-  const { user, tier, refreshProfile } = useAuth();
+  const { user, tier, isCoach, refreshProfile } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +55,10 @@ export function useSubscription(): UseSubscriptionReturn {
 
   return {
     tier,
-    isProUser: tier === 'pro',
+    isProUser: tier === 'pro' || tier === 'team',
+    isTeamUser: tier === 'team',
+    isCoach,
+    hasPremium: tier === 'pro' || tier === 'team' || isCoach,
     subscription,
     loading,
     refresh,

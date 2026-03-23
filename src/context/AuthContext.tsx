@@ -5,7 +5,12 @@ import type { User, Session } from '@supabase/supabase-js';
 export interface Profile {
   id: string;
   display_name: string | null;
-  tier: 'free' | 'pro';
+  tier: 'free' | 'pro' | 'team';
+  user_role: 'player' | 'coach';
+  is_coach: boolean;
+  coach_bio: string | null;
+  tip_enabled: boolean;
+  avatar_url: string | null;
   stripe_customer_id: string | null;
   toss_customer_id: string | null;
   paddle_customer_id: string | null;
@@ -15,7 +20,8 @@ interface AuthContextValue {
   user: User | null;
   session: Session | null;
   profile: Profile | null;
-  tier: 'free' | 'pro';
+  tier: 'free' | 'pro' | 'team';
+  isCoach: boolean;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, displayName?: string) => Promise<{ error: string | null }>;
@@ -98,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       profile,
       tier: profile?.tier ?? 'free',
+      isCoach: profile?.is_coach ?? false,
       loading,
       signIn,
       signUp,

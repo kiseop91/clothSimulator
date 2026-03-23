@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, FileText, Sparkles, BookOpen, Clock, Trash2, LogOut, User, Crown } from 'lucide-react';
+import { Plus, FileText, Sparkles, BookOpen, Clock, Trash2, LogOut, User, Crown, Share2, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useDrillStore } from '../context/StorageContext';
 import { useSubscription } from '../hooks/useSubscription';
 import type { Drill, PracticeSession } from '../types/drill';
 import { createEmptyDrill } from '../types/drill';
+import { supabase } from '../lib/supabase';
 
 export default function DashboardPage() {
   const { user, profile, signOut } = useAuth();
@@ -53,21 +54,49 @@ export default function DashboardPage() {
     refresh();
   };
 
+  const [shareModal, setShareModal] = useState<Drill | null>(null);
+  const [shareTitle, setShareTitle] = useState('');
+  const [shareTags, setShareTags] = useState('');
+  const [sharing, setSharing] = useState(false);
+
+  const handleShare = async () => {
+    if (!shareModal || !shareTitle.trim()) return;
+    setSharing(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    await fetch('/api/community/drills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify({
+        title: shareTitle.trim(),
+        description: shareModal.description,
+        tags: shareTags.split(',').map(t => t.trim()).filter(Boolean),
+        drillData: shareModal,
+      }),
+    });
+
+    setShareModal(null);
+    setSharing(false);
+    alert('커뮤니티에 공유되었습니다!');
+  };
+
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
 
   return (
-    <div className="h-screen bg-gray-900 text-gray-200 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 shrink-0">
+    <div className="h-full bg-gray-900 text-gray-200 flex flex-col overflow-hidden">
+      {/* Header — mobile only shows logo, desktop hides it (SideNav handles) */}
+      <div className="bg-gray-800 border-b border-gray-700 shrink-0 md:border-b md:border-gray-700">
         <div className="max-w-5xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-lg flex items-center justify-center shrink-0">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 sm:w-5 sm:h-5 text-white">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 md:hidden">
+            <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-cyan-400 rounded-lg flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 text-white">
                 <path d="M4 20 L12 4 L14 4 L14 14 L20 18 L18 20 L12 16 L6 20 Z" />
               </svg>
             </div>
-            <h1 className="text-white font-semibold text-sm sm:text-lg truncate">Hockey Drill Studio</h1>
+            <h1 className="text-white font-semibold text-sm truncate">Hockey Drill Studio</h1>
           </div>
+          <h1 className="hidden md:block text-white font-semibold text-lg">대시보드</h1>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {!isProUser && (
               <button
@@ -165,6 +194,12 @@ export default function DashboardPage() {
                     <h3 className="text-sm font-medium text-white truncate">{drill.name}</h3>
                   </div>
                   <button
+                    onClick={e => { e.stopPropagation(); setShareModal(drill); setShareTitle(drill.name); }}
+                    className="p-1.5 text-gray-600 hover:text-blue-400 active:text-blue-300 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer"
+                  >
+                    <Share2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                  </button>
+                  <button
                     onClick={e => { e.stopPropagation(); handleDeleteDrill(drill.id); }}
                     className="p-1.5 -mr-1 text-gray-600 hover:text-red-400 active:text-red-300 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer"
                   >
@@ -209,6 +244,23 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Share Modal */}
+      {shareModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center" onClick={() => setShareModal(null)}>
+          <div className="bg-gray-800 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-white font-semibold text-sm">커뮤니티에 공유</h3>
+              <button onClick={() => setShareModal(null)} className="p-1 text-gray-400 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <input value={shareTitle} onChange={e => setShareTitle(e.target.value)} placeholder="제목" className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+            <input value={shareTags} onChange={e => setShareTags(e.target.value)} placeholder="태그 (콤마 구분: breakout, rush)" className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+            <button onClick={handleShare} disabled={sharing || !shareTitle.trim()} className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl cursor-pointer">
+              {sharing ? '공유 중...' : '공유하기'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

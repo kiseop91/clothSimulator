@@ -66,7 +66,7 @@ export default function AccountPage() {
   };
 
   return (
-    <div className="h-screen bg-gray-900 text-gray-200 overflow-y-auto">
+    <div className="h-full bg-gray-900 text-gray-200 overflow-y-auto">
       <div className="max-w-lg mx-auto px-4 py-4 sm:py-8 pb-28 sm:pb-8">
         <button onClick={() => navigate('/dashboard')} className="flex items-center gap-1 text-gray-500 hover:text-gray-300 text-xs sm:text-sm mb-4 sm:mb-6 cursor-pointer">
           <ArrowLeft className="w-4 h-4" /> 대시보드

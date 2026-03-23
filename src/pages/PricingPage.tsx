@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Check, Crown, ArrowLeft } from 'lucide-react';
+import { Check, Crown, ArrowLeft, Users } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSubscription } from '../hooks/useSubscription';
 import { supabase } from '../lib/supabase';
@@ -61,8 +61,17 @@ export default function PricingPage() {
     '우선 지원',
   ];
 
+  const TEAM_FEATURES = [
+    '팀원 전체 Pro 기능',
+    '팀 관리 (로스터, 역할)',
+    '코치 초대 (코치 무료)',
+    '팀 세션/드릴 공유',
+    '팀 그룹 채팅',
+    '매치 메이킹',
+  ];
+
   return (
-    <div className="h-screen bg-gray-900 text-gray-200 flex flex-col overflow-hidden">
+    <div className="h-full bg-gray-900 text-gray-200 flex flex-col overflow-hidden">
       <div className="max-w-4xl mx-auto px-4 py-4 sm:py-8 pb-28 sm:pb-8 w-full flex-1 overflow-y-auto">
         <button
           onClick={() => navigate(-1)}
@@ -76,7 +85,7 @@ export default function PricingPage() {
           <p className="text-gray-500 text-xs sm:text-base">Hockey Drill Studio Pro로 더 많은 기능을 사용하세요</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 max-w-2xl mx-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-5 max-w-4xl mx-auto">
           {/* Free */}
           <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-white mb-1">Free</h3>
@@ -141,6 +150,32 @@ export default function PricingPage() {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Team */}
+          <div className="bg-gray-800 border-2 border-blue-500/50 rounded-2xl p-5 sm:p-6 relative">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-[10px] sm:text-xs font-medium rounded-full">
+              팀 추천
+            </div>
+            <h3 className="text-base sm:text-lg font-semibold text-white mb-1 flex items-center gap-2">
+              <Users className="w-4 h-4 sm:w-5 sm:h-5 text-blue-400" /> Team
+            </h3>
+            <div className="text-2xl sm:text-3xl font-bold text-white mb-3 sm:mb-4">₩49,900 <span className="text-xs sm:text-sm font-normal text-gray-500">/월</span></div>
+            <ul className="space-y-2 mb-5 sm:mb-6">
+              {TEAM_FEATURES.map(f => (
+                <li key={f} className="flex items-center gap-2 text-xs sm:text-sm text-gray-300">
+                  <Check className="w-4 h-4 text-blue-400 shrink-0" /> {f}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => handleCheckout('stripe')}
+              disabled={loading !== null}
+              className="w-full py-2.5 sm:py-3 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-400 hover:to-cyan-400 active:from-blue-600 active:to-cyan-600 disabled:opacity-50 text-white text-sm font-medium rounded-xl cursor-pointer transition-all"
+            >
+              {loading ? '처리 중...' : '팀 플랜 시작'}
+            </button>
+            <p className="text-[10px] text-gray-600 text-center mt-2">5명이 모이면 코치 무료 초대</p>
           </div>
         </div>
       </div>

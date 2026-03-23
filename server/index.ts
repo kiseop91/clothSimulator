@@ -9,6 +9,10 @@ import { computeKeyframes } from './computeKeyframes.js';
 import { validatePromptInput, ABUSE_WARNING } from './promptGuard.js';
 import { requireAuth, optionalAuth, supabaseAdmin, type AuthRequest } from './middleware/auth.js';
 import paymentRoutes from './paymentRoutes.js';
+import teamRoutes from './teamRoutes.js';
+import communityRoutes from './communityRoutes.js';
+import matchRoutes from './matchRoutes.js';
+import chatRoutes from './chatRoutes.js';
 
 const app = express();
 
@@ -16,8 +20,12 @@ const app = express();
 app.use('/api/webhooks', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// Payment routes
+// Routes
 app.use(paymentRoutes);
+app.use(teamRoutes);
+app.use(communityRoutes);
+app.use(matchRoutes);
+app.use(chatRoutes);
 
 // AI usage check middleware for free tier
 async function checkAIUsage(req: AuthRequest, res: express.Response, next: express.NextFunction): Promise<void> {

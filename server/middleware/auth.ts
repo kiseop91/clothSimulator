@@ -10,7 +10,8 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     email: string;
-    tier: 'free' | 'pro';
+    tier: 'free' | 'pro' | 'team';
+    isCoach: boolean;
   };
 }
 
@@ -45,14 +46,15 @@ async function _attachUser(req: AuthRequest, token: string): Promise<void> {
 
     const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select('tier')
+      .select('tier, is_coach')
       .eq('id', user.id)
       .single();
 
     req.user = {
       id: user.id,
       email: user.email || '',
-      tier: (profile?.tier as 'free' | 'pro') || 'free',
+      tier: (profile?.tier as 'free' | 'pro' | 'team') || 'free',
+      isCoach: profile?.is_coach || false,
     };
   } catch {}
 }
