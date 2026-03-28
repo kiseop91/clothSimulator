@@ -76,10 +76,8 @@ router.get('/api/community/drills/:id', optionalAuth as any, async (req: AuthReq
 
   if (!drill) { res.status(404).json({ error: 'Not found' }); return; }
 
-  // Increment view count
-  await supabaseAdmin.from('shared_drills')
-    .update({ views_count: drill.views_count + 1 })
-    .eq('id', id);
+  // Increment view count (atomic to avoid race condition)
+  await supabaseAdmin.rpc('increment_community_views', { drill_id: id }).catch(() => {});
 
   // Author
   const { data: profile } = await supabaseAdmin

@@ -1,11 +1,9 @@
 import { useLocation, useNavigate } from 'react-router';
-import { Home, Users, Swords, MessageCircle, User } from 'lucide-react';
+import { Home, Users, User } from 'lucide-react';
 
 const NAV_ITEMS = [
   { path: '/dashboard', icon: Home, label: '홈' },
   { path: '/community', icon: Users, label: '커뮤니티' },
-  { path: '/matches', icon: Swords, label: '매치' },
-  { path: '/messages', icon: MessageCircle, label: '메시지' },
   { path: '/account', icon: User, label: '계정' },
 ];
 

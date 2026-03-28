@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="robots" content="noindex">
+  <title>Hockey Drill</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111827; color: #e5e7eb;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 16px; overflow: hidden;
+    }
+    .drill-title {
+      font-size: 16px; font-weight: 600; color: #fff;
+      text-align: center; margin-bottom: 12px; max-width: 400px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .rink-container {
+      width: 100%; max-width: 800px; position: relative;
+      background: #f0f4f8; border-radius: 12px; overflow: hidden;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+    .rink-container svg { display: block; width: 100%; height: auto; }
+    .controls {
+      display: flex; align-items: center; gap: 12px;
+      margin-top: 12px; width: 100%; max-width: 400px;
+    }
+    .play-btn {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: #2563eb; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s; flex-shrink: 0;
+    }
+    .play-btn:hover { background: #3b82f6; }
+    .play-btn:active { background: #1d4ed8; }
+    .play-btn svg { fill: #fff; width: 20px; height: 20px; }
+    .progress-wrap {
+      flex: 1; height: 44px; display: flex; align-items: center; cursor: pointer;
+    }
+    .progress-bar {
+      width: 100%; height: 4px; background: #374151; border-radius: 2px;
+      position: relative; overflow: visible;
+    }
+    .progress-fill {
+      height: 100%; background: #2563eb; border-radius: 2px;
+      width: 0%; transition: none;
+    }
+    .progress-dot {
+      width: 14px; height: 14px; background: #fff; border-radius: 50%;
+      position: absolute; top: 50%; transform: translate(-50%, -50%);
+      left: 0%; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+    .time-label {
+      font-size: 12px; color: #9ca3af; flex-shrink: 0; width: 36px; text-align: right;
+    }
+    .branding {
+      margin-top: 20px; text-align: center; opacity: 0.6;
+      font-size: 12px; color: #6b7280;
+    }
+    .branding a { color: #60a5fa; text-decoration: none; }
+    .branding a:hover { text-decoration: underline; }
+
+    /* States */
+    .state-msg {
+      text-align: center; padding: 60px 20px;
+    }
+    .state-msg h2 { font-size: 18px; color: #fff; margin-bottom: 8px; }
+    .state-msg p { font-size: 14px; color: #9ca3af; margin-bottom: 16px; }
+    .state-msg button {
+      padding: 10px 24px; background: #2563eb; color: #fff;
+      border: none; border-radius: 10px; font-size: 14px; cursor: pointer;
+    }
+    .state-msg button:hover { background: #3b82f6; }
+    .spinner {
+      width: 32px; height: 32px; border: 3px solid #374151;
+      border-top-color: #2563eb; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Token labels */
+    .token-label {
+      font-size: 9px; font-weight: 700; fill: #fff;
+      text-anchor: middle; dominant-baseline: central;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const DRILL_UUID = '{{DRILL_UUID}}';
+    const API_URL = '/api/drill-shares/' + DRILL_UUID;
+    const RINK_W = 200, RINK_H = 85;
+
+    // Token type colors (fallback)
+    const TOKEN_RADIUS = 3;
+    const PATH_STYLES = { 0: '', 1: '8,4', 2: '2,4', 3: '1,3', 4: '6,3' };
+
+    const app = document.getElementById('app');
+
+    // --- State ---
+    let drillData = null;
+    let playing = false;
+    let currentTime = 0;
+    let animFrameId = null;
+    let lastFrameTs = null;
+
+    // --- Load ---
+    async function loadDrill() {
+      app.innerHTML = '<div class="state-msg"><div class="spinner"></div><p>드릴을 불러오는 중...</p></div>';
+      try {
+        const res = await fetch(API_URL);
+        if (res.status === 404) {
+          app.innerHTML = '<div class="state-msg"><h2>🏒</h2><h2>드릴을 찾을 수 없습니다</h2><p>링크가 올바른지 확인해주세요.</p></div><div class="branding"><a href="/">Hockey Drill Studio</a></div>';
+          return;
+        }
+        if (res.status === 410) {
+          app.innerHTML = '<div class="state-msg"><h2>🏒</h2><h2>이 드릴은 더 이상 사용할 수 없습니다</h2><p>코치가 공유를 중단했습니다.</p><a href="/" style="color:#60a5fa;font-size:14px;">Hockey Drill Studio 방문하기</a></div>';
+          return;
+        }
+        if (!res.ok) throw new Error('서버 오류');
+        const json = await res.json();
+        drillData = json.drill;
+        document.title = (json.title || 'Hockey Drill') + ' — Hockey Drill Studio';
+        renderPlayer();
+      } catch (e) {
+        app.innerHTML = '<div class="state-msg"><h2>연결 오류</h2><p>인터넷 연결을 확인하고 다시 시도해주세요.</p><button onclick="loadDrill()">다시 시도</button></div>';
+      }
+    }
+
+    // --- Render ---
+    function renderPlayer() {
+      const d = drillData;
+      if (!d) return;
+
+      app.innerHTML = '';
+
+      // Title
+      const titleEl = document.createElement('div');
+      titleEl.className = 'drill-title';
+      titleEl.textContent = d.title || 'Hockey Drill';
+      app.appendChild(titleEl);
+
+      // Rink SVG
+      const container = document.createElement('div');
+      container.className = 'rink-container';
+      container.innerHTML = buildRinkSVG(d);
+      app.appendChild(container);
+
+      // Controls
+      const controls = document.createElement('div');
+      controls.className = 'controls';
+      controls.innerHTML = `
+        <button class="play-btn" id="playBtn">
+          <svg viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>
+        </button>
+        <div class="progress-wrap" id="progressWrap">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+            <div class="progress-dot" id="progressDot"></div>
+          </div>
+        </div>
+        <span class="time-label" id="timeLabel">0:00</span>
+      `;
+      app.appendChild(controls);
+
+      // Branding
+      const brand = document.createElement('div');
+      brand.className = 'branding';
+      brand.innerHTML = '🏒 <a href="/">Hockey Drill Studio</a>에서 만들어졌습니다';
+      app.appendChild(brand);
+
+      // Event listeners
+      document.getElementById('playBtn').addEventListener('click', togglePlay);
+      document.getElementById('progressWrap').addEventListener('click', seekTo);
+
+      // Initial render
+      updateTokenPositions(0);
+    }
+
+    function buildRinkSVG(d) {
+      const w = RINK_W, h = RINK_H;
+      const cr = 28; // corner radius
+
+      let svg = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">`;
+
+      // Ice background
+      svg += `<rect width="${w}" height="${h}" rx="${cr}" fill="#f0f4f8"/>`;
+
+      // Rink border
+      svg += `<rect x="0.5" y="0.5" width="${w-1}" height="${h-1}" rx="${cr}" fill="none" stroke="#1e3a5f" stroke-width="1"/>`;
+
+      // Center line (red)
+      svg += `<line x1="${w/2}" y1="0" x2="${w/2}" y2="${h}" stroke="#c53030" stroke-width="0.8"/>`;
+
+      // Center circle
+      svg += `<circle cx="${w/2}" cy="${h/2}" r="15" fill="none" stroke="#2563eb" stroke-width="0.6"/>`;
+      svg += `<circle cx="${w/2}" cy="${h/2}" r="0.8" fill="#2563eb"/>`;
+
+      // Blue lines
+      svg += `<line x1="75" y1="0" x2="75" y2="${h}" stroke="#2563eb" stroke-width="0.8"/>`;
+      svg += `<line x1="125" y1="0" x2="125" y2="${h}" stroke="#2563eb" stroke-width="0.8"/>`;
+
+      // Goal lines (red, thin)
+      svg += `<line x1="11" y1="0" x2="11" y2="${h}" stroke="#c53030" stroke-width="0.4"/>`;
+      svg += `<line x1="189" y1="0" x2="189" y2="${h}" stroke="#c53030" stroke-width="0.4"/>`;
+
+      // Faceoff circles (simplified)
+      const faceoffs = [[31, 21.5], [31, 63.5], [169, 21.5], [169, 63.5]];
+      faceoffs.forEach(([cx, cy]) => {
+        svg += `<circle cx="${cx}" cy="${cy}" r="15" fill="none" stroke="#c53030" stroke-width="0.4"/>`;
+        svg += `<circle cx="${cx}" cy="${cy}" r="0.6" fill="#c53030"/>`;
+      });
+
+      // Neutral zone faceoff dots
+      const nzDots = [[80, 21.5], [80, 63.5], [120, 21.5], [120, 63.5]];
+      nzDots.forEach(([cx, cy]) => {
+        svg += `<circle cx="${cx}" cy="${cy}" r="0.6" fill="#c53030"/>`;
+      });
+
+      // Goals (creases)
+      svg += `<rect x="2" y="${h/2-3}" width="4" height="6" rx="1" fill="none" stroke="#374151" stroke-width="0.4"/>`;
+      svg += `<rect x="${w-6}" y="${h/2-3}" width="4" height="6" rx="1" fill="none" stroke="#374151" stroke-width="0.4"/>`;
+
+      // --- Paths ---
+      (d.paths || []).forEach(p => {
+        if (!p.points || p.points.length < 2) return;
+        const pts = p.points.map(pt => `${pt.x},${pt.y}`).join(' ');
+        const color = rgbToHex(p.color || [0.3, 0.3, 0.3]);
+        const dash = PATH_STYLES[p.style] || '';
+        svg += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1" stroke-dasharray="${dash}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        if (p.hasArrow && p.points.length >= 2) {
+          const last = p.points[p.points.length - 1];
+          const prev = p.points[p.points.length - 2];
+          svg += arrowHead(prev.x, prev.y, last.x, last.y, color);
+        }
+      });
+
+      // --- Tokens ---
+      (d.tokens || []).forEach(tok => {
+        const color = rgbToHex(tok.color || [0.5, 0.5, 0.5]);
+        svg += `<circle class="token" data-id="${tok.id}" cx="${tok.x}" cy="${tok.y}" r="${TOKEN_RADIUS}" fill="${color}" stroke="#fff" stroke-width="0.4"/>`;
+        if (tok.label) {
+          svg += `<text class="token-label" data-id="${tok.id}-label" x="${tok.x}" y="${tok.y}">${escapeXml(tok.label)}</text>`;
+        }
+      });
+
+      svg += '</svg>';
+      return svg;
+    }
+
+    function arrowHead(x1, y1, x2, y2, color) {
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const size = 3;
+      const a1x = x2 - size * Math.cos(angle - 0.5);
+      const a1y = y2 - size * Math.sin(angle - 0.5);
+      const a2x = x2 - size * Math.cos(angle + 0.5);
+      const a2y = y2 - size * Math.sin(angle + 0.5);
+      return `<polygon points="${x2},${y2} ${a1x},${a1y} ${a2x},${a2y}" fill="${color}"/>`;
+    }
+
+    // --- Animation ---
+    function togglePlay() {
+      if (playing) {
+        pause();
+      } else {
+        if (currentTime >= (drillData.duration_ms || 5000)) {
+          currentTime = 0;
+        }
+        play();
+      }
+    }
+
+    function play() {
+      playing = true;
+      lastFrameTs = null;
+      updatePlayBtn();
+      tick();
+    }
+
+    function pause() {
+      playing = false;
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+      updatePlayBtn();
+    }
+
+    function tick() {
+      if (!playing) return;
+      animFrameId = requestAnimationFrame((ts) => {
+        if (!lastFrameTs) { lastFrameTs = ts; tick(); return; }
+        const dt = ts - lastFrameTs;
+        lastFrameTs = ts;
+        currentTime += dt;
+        const dur = drillData.duration_ms || 5000;
+        if (currentTime >= dur) {
+          currentTime = dur;
+          pause();
+        }
+        updateTokenPositions(currentTime);
+        updateProgress(currentTime, dur);
+        tick();
+      });
+    }
+
+    function updateTokenPositions(timeMs) {
+      if (!drillData || !drillData.tokens) return;
+      drillData.tokens.forEach(tok => {
+        const el = document.querySelector(`.token[data-id="${tok.id}"]`);
+        const labelEl = document.querySelector(`[data-id="${tok.id}-label"]`);
+        if (!el) return;
+        const pos = interpolatePosition(tok, timeMs);
+        el.setAttribute('cx', pos.x);
+        el.setAttribute('cy', pos.y);
+        if (labelEl) {
+          labelEl.setAttribute('x', pos.x);
+          labelEl.setAttribute('y', pos.y);
+        }
+      });
+    }
+
+    function interpolatePosition(token, timeMs) {
+      if (!token.keyframes || token.keyframes.length === 0) {
+        return { x: token.x, y: token.y };
+      }
+      const kfs = token.keyframes;
+      if (timeMs <= kfs[0].t) return { x: kfs[0].x, y: kfs[0].y };
+      if (timeMs >= kfs[kfs.length - 1].t) return { x: kfs[kfs.length - 1].x, y: kfs[kfs.length - 1].y };
+
+      // Find the two surrounding keyframes
+      for (let i = 0; i < kfs.length - 1; i++) {
+        if (timeMs >= kfs[i].t && timeMs <= kfs[i + 1].t) {
+          const ratio = (timeMs - kfs[i].t) / (kfs[i + 1].t - kfs[i].t);
+          return {
+            x: kfs[i].x + (kfs[i + 1].x - kfs[i].x) * ratio,
+            y: kfs[i].y + (kfs[i + 1].y - kfs[i].y) * ratio,
+          };
+        }
+      }
+      return { x: token.x, y: token.y };
+    }
+
+    function seekTo(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const dur = drillData.duration_ms || 5000;
+      currentTime = ratio * dur;
+      updateTokenPositions(currentTime);
+      updateProgress(currentTime, dur);
+    }
+
+    function updateProgress(timeMs, durMs) {
+      const pct = Math.min(100, (timeMs / durMs) * 100);
+      const fill = document.getElementById('progressFill');
+      const dot = document.getElementById('progressDot');
+      const label = document.getElementById('timeLabel');
+      if (fill) fill.style.width = pct + '%';
+      if (dot) dot.style.left = pct + '%';
+      if (label) {
+        const sec = Math.floor(timeMs / 1000);
+        const ms = Math.floor((timeMs % 1000) / 100);
+        label.textContent = sec + ':' + String(ms).padStart(1, '0') + '0';
+      }
+    }
+
+    function updatePlayBtn() {
+      const btn = document.getElementById('playBtn');
+      if (!btn) return;
+      btn.innerHTML = playing
+        ? '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="4" height="18" fill="#fff"/><rect x="15" y="3" width="4" height="18" fill="#fff"/></svg>'
+        : '<svg viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21" fill="#fff"/></svg>';
+    }
+
+    // --- Helpers ---
+    function rgbToHex(rgb) {
+      return '#' + rgb.map(c => Math.round(c * 255).toString(16).padStart(2, '0')).join('');
+    }
+
+    function escapeXml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // --- Init ---
+    loadDrill();
+  </script>
+</body>
+</html>

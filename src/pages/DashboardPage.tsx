@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, FileText, Sparkles, BookOpen, Clock, Trash2, LogOut, User, Crown, Share2, X } from 'lucide-react';
+import { Plus, FileText, Sparkles, BookOpen, Clock, Trash2, LogOut, User, Crown, Share2, X, Link2, ToggleLeft, ToggleRight, Eye } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useDrillStore } from '../context/StorageContext';
 import { useSubscription } from '../hooks/useSubscription';
@@ -17,7 +17,37 @@ export default function DashboardPage() {
   const [drills, setDrills] = useState<Drill[]>([]);
   const [sessions, setSessions] = useState<PracticeSession[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'drills' | 'sessions'>('drills');
+  const [tab, setTab] = useState<'drills' | 'sessions' | 'shares'>('drills');
+
+  // Shared drills management
+  const [myShares, setMyShares] = useState<Array<{ id: string; title: string; active: boolean; view_count: number; created_at: string; shareUrl: string }>>([]);
+  const [sharesLoading, setSharesLoading] = useState(false);
+  const [togglingShare, setTogglingShare] = useState<string | null>(null);
+
+  const fetchMyShares = useCallback(async () => {
+    setSharesLoading(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { setSharesLoading(false); return; }
+    try {
+      const res = await fetch('/api/drill-shares/mine', { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+      const data = await res.json();
+      setMyShares(data.shares || []);
+    } catch {}
+    setSharesLoading(false);
+  }, []);
+
+  const toggleShareActive = useCallback(async (shareId: string, active: boolean) => {
+    setTogglingShare(shareId);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { setTogglingShare(null); return; }
+    await fetch(`/api/drill-shares/${shareId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify({ active }),
+    });
+    setMyShares(prev => prev.map(s => s.id === shareId ? { ...s, active } : s));
+    setTogglingShare(null);
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -28,6 +58,7 @@ export default function DashboardPage() {
   }, [store]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { if (tab === 'shares') fetchMyShares(); }, [tab, fetchMyShares]);
 
   const handleNewDrill = async () => {
     if (!isProUser && drills.length >= 3) {
@@ -159,6 +190,14 @@ export default function DashboardPage() {
           >
             세션 ({sessions.length})
           </button>
+          <button
+            onClick={() => setTab('shares')}
+            className={`pb-2 text-xs sm:text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+              tab === 'shares' ? 'text-white border-blue-500' : 'text-gray-500 border-transparent'
+            }`}
+          >
+            공유
+          </button>
         </div>
 
         {loading ? (
@@ -218,7 +257,7 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        ) : (
+        ) : tab === 'sessions' ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
             {sessions.length === 0 ? (
               <p className="text-gray-500 text-sm col-span-full text-center py-8">아직 세션이 없습니다</p>
@@ -242,7 +281,45 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        )}
+        ) : tab === 'shares' ? (
+          sharesLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : myShares.length === 0 ? (
+            <div className="text-center py-12">
+              <Link2 className="w-12 h-12 mx-auto mb-3 text-gray-700" />
+              <p className="text-sm text-gray-500">아직 공유한 드릴이 없습니다</p>
+              <p className="text-xs text-gray-600 mt-1">에디터에서 드릴을 공유해보세요</p>
+              <button onClick={() => navigate('/editor')} className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl cursor-pointer">
+                에디터로 이동
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {myShares.map(share => (
+                <div key={share.id} className="bg-gray-800 border border-gray-700 rounded-xl p-3.5 sm:p-4 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-white truncate">{share.title || '제목 없음'}</h3>
+                    <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-600">
+                      <span className="flex items-center gap-1"><Eye className="w-3 h-3" /> {share.view_count}회</span>
+                      <span>{new Date(share.created_at).toLocaleDateString('ko-KR')}</span>
+                      <span className={share.active ? 'text-green-500' : 'text-red-400'}>{share.active ? '활성' : '비활성'}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => toggleShareActive(share.id, !share.active)}
+                    disabled={togglingShare === share.id}
+                    className="p-2 text-gray-400 hover:text-white cursor-pointer disabled:opacity-50"
+                    title={share.active ? '비활성화' : '활성화'}
+                  >
+                    {share.active ? <ToggleRight className="w-5 h-5 text-green-500" /> : <ToggleLeft className="w-5 h-5 text-gray-500" />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )
+        ) : null}
       </div>
 
       {/* Share Modal */}

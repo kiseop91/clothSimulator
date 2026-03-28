@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { Layout, Monitor, PanelRightOpen, PanelRightClose, X, BookOpen, Sparkles, SmartphoneIcon, Wand2 } from 'lucide-react';
+import { Layout, Monitor, PanelRightOpen, PanelRightClose, X, BookOpen, Sparkles, SmartphoneIcon, Wand2, Share2, Copy, Check as CheckIcon, Link2 } from 'lucide-react';
 import { useRenderer } from '../context/RendererContext';
 import { useAuth } from '../context/AuthContext';
 import { useDrillStore } from '../context/StorageContext';
@@ -8,6 +8,8 @@ import { useSubscription } from '../hooks/useSubscription';
 import { useDrillEditor } from '../hooks/useDrillEditor';
 import { createEmptyDrill, type Drill } from '../types/drill';
 import { generateDrill } from '../lib/aiGenerate';
+import { serializeDrill } from '../lib/animationSerializer';
+import { supabase } from '../lib/supabase';
 import { checkAIQuota } from '../lib/aiUsage';
 import RinkViewer from '../components/RinkViewer';
 import DrillEditor from '../components/DrillEditor';
@@ -56,6 +58,12 @@ export default function EditorPage() {
   const [showAIAnimate, setShowAIAnimate] = useState(false);
   const [aiSelectedIds, setAISelectedIds] = useState<string[]>([]);
   const isPortraitMobile = useIsPortraitMobile();
+
+  const [showShare, setShowShare] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
 
   const [showWelcome, setShowWelcome] = useState(!drillId);
   const [welcomePhase, setWelcomePhase] = useState<'input' | 'loading' | 'rotate'>('input');
@@ -164,6 +172,53 @@ export default function EditorPage() {
     setWelcomePrompt('');
     try { (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } catch {}
   }, [isPortraitMobile, pendingDrill]);
+
+  const handleShare = useCallback(async () => {
+    setShareLoading(true);
+    setShareError(null);
+    setShareUrl(null);
+    setShareCopied(false);
+
+    const result = serializeDrill(state.drill);
+    if ('error' in result) {
+      setShareError(result.error);
+      setShareLoading(false);
+      return;
+    }
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setShareError('로그인이 필요합니다'); setShareLoading(false); return; }
+
+      const res = await fetch('/api/drill-shares', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({ drillJson: result.payload, title: state.drill.name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setShareError(data.error || '공유 링크 생성 실패');
+      } else {
+        setShareUrl(window.location.origin + data.shareUrl);
+      }
+    } catch {
+      setShareError('네트워크 오류. 다시 시도해주세요.');
+    }
+    setShareLoading(false);
+  }, [state.drill]);
+
+  const handleCopyShareUrl = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    } catch {
+      // Fallback: select input
+      const input = document.querySelector<HTMLInputElement>('#share-url-input');
+      if (input) { input.select(); document.execCommand('copy'); setShareCopied(true); setTimeout(() => setShareCopied(false), 2000); }
+    }
+  }, [shareUrl]);
 
   const handleWelcomeGenerate = useCallback(async () => {
     if (!welcomePrompt.trim()) return;
@@ -351,6 +406,9 @@ export default function EditorPage() {
           <button onClick={() => { if (showAIAnimate) { setShowAIAnimate(false); setAISelectedIds([]); } else { actions.setPlaying(false); setShowAIAnimate(true); } }} disabled={state.drill.objects.length === 0} className={`px-3 py-1.5 rounded-md text-sm transition-colors cursor-pointer flex items-center gap-1.5 ${showAIAnimate ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white disabled:opacity-40 disabled:cursor-not-allowed'}`}>
             <Wand2 className="w-3.5 h-3.5" /> AI Animate
           </button>
+          <button onClick={() => { setShowShare(true); handleShare(); }} disabled={state.drill.objects.length === 0} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-md text-sm transition-colors cursor-pointer flex items-center gap-1.5">
+            <Share2 className="w-3.5 h-3.5" /> Share
+          </button>
           <button onClick={() => setShowExport(true)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm transition-colors cursor-pointer">Export</button>
           <button onClick={() => setShowSidebar(!showSidebar)} className="lg:hidden p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors cursor-pointer" title="Toggle Panel">
             {showSidebar ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
@@ -478,6 +536,60 @@ export default function EditorPage() {
 
       {showExport && <ExportDialog state={state} bridge={bridge} onClose={() => setShowExport(false)} />}
       {showAIGenerate && <AIGenerateDialog onDrillGenerated={handleAIDrillGenerated} onClose={() => setShowAIGenerate(false)} />}
+
+      {/* Share Modal */}
+      {showShare && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center" onClick={() => setShowShare(false)}>
+          <div className="bg-gray-800 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-white font-semibold text-sm flex items-center gap-2">
+                <Link2 className="w-4 h-4 text-blue-400" /> 드릴 공유
+              </h3>
+              <button onClick={() => setShowShare(false)} className="p-1 text-gray-400 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+
+            {shareLoading && (
+              <div className="flex items-center justify-center py-6">
+                <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <span className="ml-3 text-sm text-gray-400">링크 생성 중...</span>
+              </div>
+            )}
+
+            {shareError && (
+              <div className="bg-red-900/30 border border-red-800/30 rounded-xl px-4 py-3">
+                <p className="text-sm text-red-400">{shareError}</p>
+                {shareError.includes('한도') && (
+                  <button onClick={() => { setShowShare(false); navigate('/pricing'); }} className="mt-2 text-xs text-amber-400 hover:text-amber-300 cursor-pointer">Pro로 업그레이드 →</button>
+                )}
+              </div>
+            )}
+
+            {shareUrl && !shareLoading && (
+              <>
+                <p className="text-xs text-gray-400">이 링크를 팀 그룹채팅에 공유하세요. 플레이어는 로그인 없이 모바일에서 바로 볼 수 있습니다.</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="share-url-input"
+                    type="text"
+                    readOnly
+                    value={shareUrl}
+                    className="flex-1 bg-gray-900 border border-gray-600 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none"
+                  />
+                  <button
+                    onClick={handleCopyShareUrl}
+                    className={`px-4 py-3 rounded-xl text-sm font-medium cursor-pointer transition-all ${
+                      shareCopied ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'
+                    }`}
+                  >
+                    {shareCopied ? <CheckIcon className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                {shareCopied && <p className="text-xs text-green-400">링크가 복사되었습니다!</p>}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

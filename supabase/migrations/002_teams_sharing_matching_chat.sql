@@ -263,3 +263,62 @@ CREATE TRIGGER on_drill_like_change
 -- =============================================
 
 ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+
+-- =============================================
+-- 8. DRILL SHARES (Coach sharing workflow)
+-- =============================================
+
+CREATE TABLE public.drill_shares (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  drill_json jsonb NOT NULL,
+  coach_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title text NOT NULL DEFAULT '',
+  active boolean NOT NULL DEFAULT true,
+  view_count int NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_drill_shares_coach ON public.drill_shares(coach_id);
+CREATE INDEX idx_drill_shares_active ON public.drill_shares(active);
+
+ALTER TABLE public.drill_shares ENABLE ROW LEVEL SECURITY;
+
+-- Public read for active shares (no auth needed for player viewing)
+CREATE POLICY "Anyone can read active shares" ON public.drill_shares
+  FOR SELECT USING (active = true);
+
+-- Coach can read all own shares (including inactive)
+CREATE POLICY "Coach can read own shares" ON public.drill_shares
+  FOR SELECT USING (auth.uid() = coach_id);
+
+-- Coach can create shares
+CREATE POLICY "Coach can create shares" ON public.drill_shares
+  FOR INSERT WITH CHECK (auth.uid() = coach_id);
+
+-- Coach can update own shares (toggle active)
+CREATE POLICY "Coach can update own shares" ON public.drill_shares
+  FOR UPDATE USING (auth.uid() = coach_id);
+
+-- Coach can delete own shares
+CREATE POLICY "Coach can delete own shares" ON public.drill_shares
+  FOR DELETE USING (auth.uid() = coach_id);
+
+-- Atomic view count increment (avoids race condition)
+CREATE OR REPLACE FUNCTION public.increment_drill_share_views(share_id uuid)
+RETURNS void AS $$
+BEGIN
+  UPDATE public.drill_shares
+  SET view_count = view_count + 1
+  WHERE id = share_id AND active = true;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Atomic view count increment for community drills
+CREATE OR REPLACE FUNCTION public.increment_community_views(drill_id uuid)
+RETURNS void AS $$
+BEGIN
+  UPDATE public.shared_drills
+  SET views_count = views_count + 1
+  WHERE id = drill_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

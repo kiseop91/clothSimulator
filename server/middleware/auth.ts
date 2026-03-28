@@ -56,7 +56,9 @@ async function _attachUser(req: AuthRequest, token: string): Promise<void> {
       tier: (profile?.tier as 'free' | 'pro' | 'team') || 'free',
       isCoach: profile?.is_coach || false,
     };
-  } catch {}
+  } catch (err) {
+    console.error('Auth token validation failed:', err);
+  }
 }
 
 export { supabaseAdmin };
