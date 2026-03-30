@@ -8,12 +8,14 @@ import EditorPage from './pages/EditorPage';
 import PricingPage from './pages/PricingPage';
 import AccountPage from './pages/AccountPage';
 import CommunityPage from './pages/CommunityPage';
-// Phase 2 — deferred (files exist, routes not mounted)
-// import TeamPage from './pages/TeamPage';
-// import TeamCreatePage from './pages/TeamCreatePage';
-// import TeamJoinPage from './pages/TeamJoinPage';
-// import MatchesPage from './pages/MatchesPage';
-// import MessagesPage from './pages/MessagesPage';
+import TeamPage from './pages/TeamPage';
+import TeamCreatePage from './pages/TeamCreatePage';
+import TeamJoinPage from './pages/TeamJoinPage';
+import MatchesPage from './pages/MatchesPage';
+import MessagesPage from './pages/MessagesPage';
+import GamesPage from './pages/GamesPage';
+import GameDetailPage from './pages/GameDetailPage';
+import StandingsPage from './pages/StandingsPage';
 
 export default function AppRoutes() {
   return (
@@ -35,13 +37,14 @@ export default function AppRoutes() {
         path="/community"
         element={<ProtectedRoute><CommunityPage /></ProtectedRoute>}
       />
-      {/* Phase 2 routes — deferred
       <Route path="/team" element={<ProtectedRoute><TeamPage /></ProtectedRoute>} />
       <Route path="/team/create" element={<ProtectedRoute><TeamCreatePage /></ProtectedRoute>} />
       <Route path="/team/join/:code" element={<ProtectedRoute><TeamJoinPage /></ProtectedRoute>} />
       <Route path="/matches" element={<ProtectedRoute><MatchesPage /></ProtectedRoute>} />
       <Route path="/messages" element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} />
-      */}
+      <Route path="/games" element={<ProtectedRoute><GamesPage /></ProtectedRoute>} />
+      <Route path="/games/:gameId" element={<ProtectedRoute><GameDetailPage /></ProtectedRoute>} />
+      <Route path="/standings" element={<ProtectedRoute><StandingsPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

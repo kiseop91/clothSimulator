@@ -1,11 +1,13 @@
 import { useLocation, useNavigate } from 'react-router';
-import { Home, Users, Swords, MessageCircle, User, Shield, Crown } from 'lucide-react';
+import { Home, Users, Swords, MessageCircle, User, Shield, Crown, Trophy, TrendingUp } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSubscription } from '../../hooks/useSubscription';
 
 const NAV_ITEMS = [
   { path: '/dashboard', icon: Home, label: '대시보드' },
   { path: '/team', icon: Shield, label: '팀' },
+  { path: '/games', icon: Trophy, label: '경기' },
+  { path: '/standings', icon: TrendingUp, label: '순위' },
   { path: '/community', icon: Users, label: '커뮤니티' },
   { path: '/matches', icon: Swords, label: '매치' },
   { path: '/messages', icon: MessageCircle, label: '메시지' },

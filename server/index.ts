@@ -11,10 +11,10 @@ import { requireAuth, optionalAuth, supabaseAdmin, type AuthRequest } from './mi
 import paymentRoutes from './paymentRoutes.js';
 import communityRoutes from './communityRoutes.js';
 import drillShareRoutes from './drillShareRoutes.js';
-// Phase 2 — deferred (code exists, not mounted)
-// import teamRoutes from './teamRoutes.js';
-// import matchRoutes from './matchRoutes.js';
-// import chatRoutes from './chatRoutes.js';
+import teamRoutes from './teamRoutes.js';
+import matchRoutes from './matchRoutes.js';
+import chatRoutes from './chatRoutes.js';
+import gameRoutes from './gameRoutes.js';
 
 const app = express();
 
@@ -26,10 +26,10 @@ app.use(express.json({ limit: '1mb' }));
 app.use(paymentRoutes);
 app.use(communityRoutes);
 app.use(drillShareRoutes);
-// Phase 2 — deferred
-// app.use(teamRoutes);
-// app.use(matchRoutes);
-// app.use(chatRoutes);
+app.use(teamRoutes);
+app.use(matchRoutes);
+app.use(chatRoutes);
+app.use(gameRoutes);
 
 // AI usage check middleware for free tier
 async function checkAIUsage(req: AuthRequest, res: express.Response, next: express.NextFunction): Promise<void> {
